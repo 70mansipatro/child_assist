@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:geocoding/geocoding.dart' show Placemark;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart' show DateTimeRange;
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
@@ -12,6 +13,7 @@ import 'package:child_assist/core/api/api_client.dart';
 import 'package:child_assist/core/permissions/permission_service.dart';
 import 'package:child_assist/features/auth/data/token_storage.dart';
 import 'package:child_assist/features/location/services/location_service.dart';
+import 'package:child_assist/features/photos/services/photo_gallery_service.dart';
 
 const testPassword = 'password123';
 
@@ -90,6 +92,7 @@ class FakeBackend {
     PermissionService permissionService, {
     LocationProvider? locationProvider,
     PlaceLookup? placeLookup,
+    PhotoLibrary? photoLibrary,
   }) =>
       AppServices.create(
         apiClient: ApiClient(baseUrl: 'http://test', httpClient: client),
@@ -97,6 +100,7 @@ class FakeBackend {
         permissionService: permissionService,
         locationProvider: locationProvider ?? FakeLocationProvider(),
         placeLookup: placeLookup ?? FakePlaceLookup(),
+        photoLibrary: photoLibrary ?? FakePhotoLibrary(),
       );
 
   Future<http.Response> _handle(http.Request req) async {
@@ -270,6 +274,17 @@ class FakePermissionService extends PermissionService {
     return os[permission] = onRequest[permission] ?? PermissionState.granted;
   }
 
+  /// What the user picks when the dialog is shown again for a limited grant.
+  PermissionState onRequestAgain = PermissionState.granted;
+
+  @override
+  Future<PermissionState> requestAgainIfLimited(AppPermission permission) async {
+    calls.add('requestAgain ${permission.name}');
+    if (os[permission] != PermissionState.limited) return os[permission]!;
+    dialogsShown.add(permission);
+    return os[permission] = onRequestAgain;
+  }
+
   @override
   Future<bool> openSettings() async {
     settingsOpened++;
@@ -336,4 +351,95 @@ class FakePlaceLookup implements PlaceLookup {
     if (error != null) throw error!;
     return placemark;
   }
+}
+
+/// Stands in for the device gallery. [photos] are newest first, like the real query.
+class FakePhotoLibrary implements PhotoLibrary {
+  FakePhotoLibrary([List<PhotoItem>? photos]) : photos = photos ?? [];
+
+  /// [count] photos named IMG_0001.jpg (newest), IMG_0002.jpg, ..., one per day back from
+  /// 6 Oct 2026.
+  factory FakePhotoLibrary.withPhotos(int count) => FakePhotoLibrary([
+        for (var i = 1; i <= count; i++)
+          PhotoItem(
+            id: 'p$i',
+            name: 'IMG_${i.toString().padLeft(4, '0')}.jpg',
+            width: 4032,
+            height: 3024,
+            createdAt: DateTime.utc(2026, 10, 6, 10, 30).subtract(Duration(days: i - 1)),
+            modifiedAt: DateTime.utc(2026, 10, 6, 10, 30).subtract(Duration(days: i - 1)),
+            mimeType: 'image/jpeg',
+          ),
+      ]);
+
+  final List<PhotoItem> photos;
+
+  /// Every page query, e.g. "page 0" or "page 0 2026-10-01..2026-10-03".
+  final List<String> queries = [];
+
+  /// Every image read as "id WxH".
+  final List<String> imageReads = [];
+
+  /// When > 0, that many of the next page queries throw.
+  int pageFailures = 0;
+
+  /// When set, the next page query waits for this.
+  Completer<void>? pending;
+
+  int resets = 0;
+  int selectionPickerShown = 0;
+
+  /// Whether this fake behaves like iOS (has its own limited-selection picker).
+  bool hasSelectionPicker = false;
+
+  static final Uint8List _png = base64Decode(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+  );
+
+  @override
+  Future<List<PhotoItem>> page(int page, int pageSize, {DateTimeRange? range}) async {
+    queries.add(range == null
+        ? 'page $page'
+        : 'page $page ${_day(range.start)}..${_day(range.end)}');
+    final wait = pending;
+    pending = null;
+    if (wait != null) await wait.future;
+    if (pageFailures > 0) {
+      pageFailures--;
+      throw Exception('gallery unavailable');
+    }
+    final matching = range == null
+        ? photos
+        : photos
+            .where((p) =>
+                !p.createdAt.isBefore(range.start) &&
+                p.createdAt.isBefore(range.end.add(const Duration(days: 1))))
+            .toList();
+    return matching.skip(page * pageSize).take(pageSize).toList();
+  }
+
+  @override
+  Future<Uint8List?> image(String id, int width, int height) async {
+    imageReads.add('$id ${width}x$height');
+    return _png;
+  }
+
+  @override
+  Future<PhotoItem?> details(String id) async {
+    final photo = photos.where((p) => p.id == id).firstOrNull;
+    return photo?.withDetails(fileSize: 2457600);
+  }
+
+  @override
+  Future<bool> changeLimitedSelection() async {
+    if (!hasSelectionPicker) return false;
+    selectionPickerShown++;
+    return true;
+  }
+
+  @override
+  void reset() => resets++;
+
+  static String _day(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 }

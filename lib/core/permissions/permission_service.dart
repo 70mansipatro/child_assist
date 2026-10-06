@@ -100,6 +100,22 @@ class PermissionService {
     }
   }
 
+  /// For a permission with partial access (e.g. Android 14 "selected photos"), shows the system
+  /// dialog again so the user can change the selection or allow full access. Any other state is
+  /// returned unchanged without a dialog.
+  Future<PermissionState> requestAgainIfLimited(AppPermission permission) async {
+    final native = await _nativePermission(permission);
+    if (native == null) return PermissionState.unavailable;
+    try {
+      final current = _map(await native.status);
+      if (current != PermissionState.limited) return current;
+      return _map(await native.request());
+    } catch (e) {
+      debugPrint('Permission request failed for ${permission.name}: $e');
+      return PermissionState.unavailable;
+    }
+  }
+
   /// Opens this app's page in the system settings. Returns false if that is not possible.
   Future<bool> openSettings() async {
     if (!_isMobile) return false;

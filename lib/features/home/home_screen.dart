@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../app_services.dart';
 import '../location/screens/location_screen.dart';
 import '../permissions/screens/permissions_screen.dart';
+import '../photos/screens/photos_screen.dart';
 import '../profile/screens/profile_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -57,6 +58,15 @@ class _HomeScreenState extends State<HomeScreen> {
                   onTap: () => _open(LocationScreen(
                     locationService: services.locationService,
                     historyService: services.locationHistoryService,
+                    permissionSyncService: services.permissionSyncService,
+                  )),
+                ),
+                _QuickAction(
+                  icon: Icons.photo_library_outlined,
+                  title: 'Photos',
+                  subtitle: 'View your gallery',
+                  onTap: () => _open(PhotosScreen(
+                    galleryService: services.photoGalleryService,
                     permissionSyncService: services.permissionSyncService,
                   )),
                 ),

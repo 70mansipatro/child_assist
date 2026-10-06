@@ -9,6 +9,7 @@ import 'features/location/services/location_service.dart';
 import 'features/permissions/data/permissions_api.dart';
 import 'features/permissions/services/permission_onboarding_service.dart';
 import 'features/permissions/services/permission_sync_service.dart';
+import 'features/photos/services/photo_gallery_service.dart';
 import 'features/profile/data/profile_api.dart';
 import 'features/profile/services/profile_service.dart';
 
@@ -22,16 +23,18 @@ class AppServices {
     required this.permissionOnboardingService,
     required this.locationService,
     required this.locationHistoryService,
+    required this.photoGalleryService,
   });
 
   /// Wires the real implementations. Tests can swap the HTTP client, storage, the
-  /// OS permission layer, the location hardware or the geocoder.
+  /// OS permission layer, the location hardware, the geocoder or the photo library.
   factory AppServices.create({
     ApiClient? apiClient,
     TokenStorage? tokenStorage,
     PermissionService? permissionService,
     LocationProvider? locationProvider,
     PlaceLookup? placeLookup,
+    PhotoLibrary? photoLibrary,
   }) {
     final client = apiClient ?? ApiClient();
     final authService = AuthService(api: AuthApi(client), storage: tokenStorage ?? TokenStorage());
@@ -52,6 +55,8 @@ class AppServices {
       ),
       locationHistoryService:
           LocationHistoryService(api: LocationApi(client), authService: authService),
+      photoGalleryService:
+          PhotoGalleryService(permissionService: permissions, library: photoLibrary),
     );
   }
 
@@ -62,4 +67,5 @@ class AppServices {
   final PermissionOnboardingService permissionOnboardingService;
   final LocationService locationService;
   final LocationHistoryService locationHistoryService;
+  final PhotoGalleryService photoGalleryService;
 }
