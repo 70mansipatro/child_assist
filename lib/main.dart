@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'app_services.dart';
+import 'core/widgets/widgets.dart';
 import 'features/auth/screens/login_screen.dart';
 import 'features/auth/services/auth_service.dart';
 import 'features/home/home_screen.dart';
@@ -9,6 +11,12 @@ import 'features/permissions/services/permission_onboarding_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  // Draw edge to edge: screens paint their own header behind a transparent status bar.
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    systemNavigationBarColor: Colors.transparent,
+  ));
   final services = AppServices.create();
   services.authService.restoreSession();
   runApp(MyApp(services: services));
@@ -53,7 +61,10 @@ class _MyAppState extends State<MyApp> {
     return MaterialApp(
       navigatorKey: _navigatorKey,
       title: 'Child Assist',
-      theme: ThemeData(colorScheme: .fromSeed(seedColor: Colors.deepPurple)),
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.light,
+      darkTheme: AppTheme.dark,
+      themeMode: ThemeMode.system,
       home: AuthGate(services: widget.services),
     );
   }
@@ -67,7 +78,7 @@ class AuthGate extends StatelessWidget {
 
   final AppServices services;
 
-  static const _loading = Scaffold(body: Center(child: CircularProgressIndicator()));
+  static const _loading = SplashView(key: ValueKey('splash'));
 
   @override
   Widget build(BuildContext context) {
@@ -75,34 +86,42 @@ class AuthGate extends StatelessWidget {
     final onboarding = services.permissionOnboardingService;
     return ListenableBuilder(
       listenable: Listenable.merge([authService, onboarding]),
-      builder: (context, _) {
-        final user = authService.currentUser;
-        switch (authService.status) {
-          case AuthStatus.unknown:
-            return _loading;
-          case AuthStatus.unauthenticated:
-            return LoginScreen(authService: authService);
-          case AuthStatus.authenticated:
-            if (user == null) return _loading;
-            return switch (onboarding.gateFor(user.id)) {
-              OnboardingGate.checking => _loading,
-              OnboardingGate.failed => _GateError(
-                message: onboarding.error,
-                onRetry: onboarding.refresh,
-                onLogout: authService.logout,
-              ),
-              OnboardingGate.required => PermissionOnboardingScreen(
-                key: ValueKey('onboarding-${user.id}'),
-                onboardingService: onboarding,
-                permissionService: services.permissionService,
-                syncService: services.permissionSyncService,
-                authService: authService,
-              ),
-              OnboardingGate.completed => HomeScreen(services: services),
-            };
-        }
-      },
+      // Cross-fade between Login, the walkthrough and Home instead of cutting.
+      builder: (context, _) => AnimatedSwitcher(
+        duration: const Duration(milliseconds: 380),
+        switchInCurve: Curves.easeOutCubic,
+        switchOutCurve: Curves.easeInCubic,
+        child: _screen(authService, onboarding),
+      ),
     );
+  }
+
+  Widget _screen(AuthService authService, PermissionOnboardingService onboarding) {
+    final user = authService.currentUser;
+    switch (authService.status) {
+      case AuthStatus.unknown:
+        return _loading;
+      case AuthStatus.unauthenticated:
+        return LoginScreen(authService: authService);
+      case AuthStatus.authenticated:
+        if (user == null) return _loading;
+        return switch (onboarding.gateFor(user.id)) {
+          OnboardingGate.checking => _loading,
+          OnboardingGate.failed => _GateError(
+            message: onboarding.error,
+            onRetry: onboarding.refresh,
+            onLogout: authService.logout,
+          ),
+          OnboardingGate.required => PermissionOnboardingScreen(
+            key: ValueKey('onboarding-${user.id}'),
+            onboardingService: onboarding,
+            permissionService: services.permissionService,
+            syncService: services.permissionSyncService,
+            authService: authService,
+          ),
+          OnboardingGate.completed => HomeScreen(key: ValueKey('home-${user.id}'), services: services),
+        };
+    }
   }
 }
 
@@ -118,23 +137,13 @@ class _GateError extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  message ?? 'Something went wrong.',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodyLarge,
-                ),
-                const SizedBox(height: 24),
-                FilledButton(onPressed: onRetry, child: const Text('Retry')),
-                TextButton(onPressed: onLogout, child: const Text('Log out')),
-              ],
-            ),
-          ),
+        child: StateMessage(
+          icon: Icons.cloud_off_rounded,
+          gradient: AppGradients.danger,
+          title: "We couldn't reach your account",
+          body: message ?? 'Something went wrong.',
+          action: GradientButton(onPressed: onRetry, label: const Text('Retry')),
+          secondaryAction: TextButton(onPressed: onLogout, child: const Text('Log out')),
         ),
       ),
     );

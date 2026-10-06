@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/api/api_client.dart';
+import '../../../core/widgets/widgets.dart';
 import '../services/auth_service.dart';
+import '../widgets/auth_widgets.dart';
 import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -18,6 +20,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _submitting = false;
+  bool _obscure = true;
   String? _error;
 
   @override
@@ -48,61 +51,92 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('Log in')),
-      body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: Form(
-              key: _formKey,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  TextFormField(
-                    controller: _emailController,
-                    decoration: const InputDecoration(labelText: 'Email'),
-                    keyboardType: TextInputType.emailAddress,
-                    autofillHints: const [AutofillHints.email],
-                    textInputAction: TextInputAction.next,
-                    validator: (v) =>
-                        (v == null || v.trim().isEmpty) ? 'Please enter your email' : null,
+      body: AuthBackdrop(
+        child: Form(
+          key: _formKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const AuthBrand(subtitle: 'Welcome back! Sign in to continue.'),
+              const SizedBox(height: 22),
+              FadeSlideIn(
+                index: 1,
+                child: AppCard(
+                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text('Log in', style: theme.textTheme.titleLarge),
+                      const SizedBox(height: 14),
+                      TextFormField(
+                        controller: _emailController,
+                        decoration: const InputDecoration(
+                          labelText: 'Email',
+                          prefixIcon: Icon(Icons.alternate_email_rounded),
+                        ),
+                        keyboardType: TextInputType.emailAddress,
+                        autofillHints: const [AutofillHints.email],
+                        textInputAction: TextInputAction.next,
+                        validator: (v) =>
+                            (v == null || v.trim().isEmpty) ? 'Please enter your email' : null,
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _passwordController,
+                        decoration: InputDecoration(
+                          labelText: 'Password',
+                          prefixIcon: const Icon(Icons.lock_outline_rounded),
+                          suffixIcon: PasswordVisibilityToggle(
+                            obscured: _obscure,
+                            onPressed: () => setState(() => _obscure = !_obscure),
+                          ),
+                        ),
+                        obscureText: _obscure,
+                        autofillHints: const [AutofillHints.password],
+                        textInputAction: TextInputAction.done,
+                        onFieldSubmitted: (_) => _submitting ? null : _submit(),
+                        validator: (v) =>
+                            (v == null || v.isEmpty) ? 'Please enter your password' : null,
+                      ),
+                      AuthError(message: _error),
+                      const SizedBox(height: 18),
+                      GradientButton(
+                        onPressed: _submitting ? null : _submit,
+                        label: _submitting ? const ButtonSpinner() : const Text('Log in'),
+                      ),
+                      const SizedBox(height: 2),
+                      TextButton(
+                        onPressed: _submitting
+                            ? null
+                            : () => Navigator.of(context).push(MaterialPageRoute<void>(
+                                  builder: (_) => RegisterScreen(authService: widget.authService),
+                                )),
+                        child: Text.rich(
+                          TextSpan(
+                            text: "Don't have an account? ",
+                            style: TextStyle(
+                              color: theme.colorScheme.onSurfaceVariant,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            children: [
+                              TextSpan(
+                                text: 'Register',
+                                style: TextStyle(
+                                  color: theme.colorScheme.primary,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 12),
-                  TextFormField(
-                    controller: _passwordController,
-                    decoration: const InputDecoration(labelText: 'Password'),
-                    obscureText: true,
-                    autofillHints: const [AutofillHints.password],
-                    textInputAction: TextInputAction.done,
-                    onFieldSubmitted: (_) => _submitting ? null : _submit(),
-                    validator: (v) =>
-                        (v == null || v.isEmpty) ? 'Please enter your password' : null,
-                  ),
-                  if (_error != null) ...[
-                    const SizedBox(height: 16),
-                    Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
-                  ],
-                  const SizedBox(height: 24),
-                  FilledButton(
-                    onPressed: _submitting ? null : _submit,
-                    child: _submitting
-                        ? const SizedBox(
-                            height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Text('Log in'),
-                  ),
-                  const SizedBox(height: 12),
-                  TextButton(
-                    onPressed: _submitting
-                        ? null
-                        : () => Navigator.of(context).push(MaterialPageRoute<void>(
-                              builder: (_) => RegisterScreen(authService: widget.authService),
-                            )),
-                    child: const Text("Don't have an account? Register"),
-                  ),
-                ],
+                ),
               ),
-            ),
+            ],
           ),
         ),
       ),

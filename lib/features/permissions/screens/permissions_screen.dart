@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/api/api_client.dart';
 import '../../../core/permissions/permission_service.dart';
+import '../../../core/widgets/widgets.dart';
 import '../data/permissions_api.dart';
 import '../services/permission_sync_service.dart';
 
@@ -173,8 +174,9 @@ class _PermissionsScreenState extends State<PermissionsScreen> {
           IconButton(
             tooltip: 'Refresh',
             onPressed: _busy == null ? _refresh : null,
-            icon: const Icon(Icons.refresh),
+            icon: const Icon(Icons.refresh_rounded),
           ),
+          const SizedBox(width: 8),
         ],
       ),
       body: SafeArea(
@@ -182,74 +184,208 @@ class _PermissionsScreenState extends State<PermissionsScreen> {
             ? const Center(child: CircularProgressIndicator())
             : ListenableBuilder(
                 listenable: widget.syncService,
-                builder: (context, _) => ListView(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                      child: Text(
-                        'You can change any of these at any time. Your device decides what is '
-                        'allowed; your account keeps a record of the latest status.',
-                        style: theme.textTheme.bodyMedium,
-                      ),
-                    ),
-                    if (_syncError != null)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                        child: Text(
-                          'Could not save to your account: $_syncError',
-                          style: TextStyle(color: theme.colorScheme.error),
+                builder: (context, _) => Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 640),
+                    child: ListView(
+                      padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
+                      children: [
+                        FadeSlideIn(child: _buildSummary(theme)),
+                        AnimatedSize(
+                          duration: const Duration(milliseconds: 250),
+                          child: _syncError == null
+                              ? const SizedBox(width: double.infinity)
+                              : Padding(
+                                  padding: const EdgeInsets.only(top: 12),
+                                  child: InfoBanner(
+                                    tone: BannerTone.danger,
+                                    icon: Icons.cloud_off_rounded,
+                                    message: Text('Could not save to your account: $_syncError'),
+                                  ),
+                                ),
                         ),
-                      ),
-                    for (final permission in AppPermission.values) _buildRow(permission),
-                    const Divider(height: 32),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Text('Test permission features', style: theme.textTheme.titleMedium),
-                    ),
-                    const SizedBox(height: 8),
-                    for (final permission in AppPermission.values)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                        child: OutlinedButton.icon(
-                          onPressed: _busy == null ? () => _testFeature(permission) : null,
-                          icon: Icon(_icon(permission)),
-                          label: Text('Test ${permission.label} Permission'),
+                        const SizedBox(height: 22),
+                        const SectionTitle('Device permissions'),
+                        const SizedBox(height: 10),
+                        for (final (i, permission) in AppPermission.values.indexed)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: FadeSlideIn(index: i + 1, child: _buildRow(permission)),
+                          ),
+                        const SizedBox(height: 18),
+                        const SectionTitle(
+                          'Test permission features',
+                          subtitle: 'Try how each feature asks for access',
                         ),
-                      ),
-                  ],
+                        const SizedBox(height: 10),
+                        for (final permission in AppPermission.values)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: OutlinedButton.icon(
+                              style: OutlinedButton.styleFrom(
+                                alignment: Alignment.centerLeft,
+                                backgroundColor: theme.colorScheme.surface,
+                                foregroundColor: theme.colorScheme.onSurface,
+                                side: BorderSide(color: theme.colorScheme.outlineVariant),
+                              ),
+                              onPressed: _busy == null ? () => _testFeature(permission) : null,
+                              icon: Icon(_icon(permission), color: _gradient(permission).colors.first),
+                              label: Text('Test ${permission.label} Permission'),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
       ),
     );
   }
 
+  /// "3 of 5 allowed" with a progress bar, on the brand gradient.
+  Widget _buildSummary(ThemeData theme) {
+    final available = AppPermission.values
+        .where((p) => _device[p] != PermissionState.unavailable && _device[p] != null)
+        .toList();
+    final allowed = available.where((p) => _device[p]!.isUsable).length;
+    final total = available.isEmpty ? AppPermission.values.length : available.length;
+    return AppCard(
+      gradient: AppGradients.permissions,
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(Icons.shield_rounded, color: Colors.white),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '$allowed/$total allowed',
+                      style: theme.textTheme.titleLarge?.copyWith(color: Colors.white),
+                    ),
+                    Text(
+                      'Your privacy, your choice',
+                      style: theme.textTheme.bodySmall?.copyWith(color: Colors.white.withValues(alpha: 0.85)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(end: total == 0 ? 0 : allowed / total),
+              duration: const Duration(milliseconds: 700),
+              curve: Curves.easeOutCubic,
+              builder: (context, value, _) => LinearProgressIndicator(
+                value: value,
+                minHeight: 8,
+                color: Colors.white,
+                backgroundColor: Colors.white.withValues(alpha: 0.22),
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            'You can change any of these at any time. Your device decides what is '
+            'allowed; your account keeps a record of the latest status.',
+            style: theme.textTheme.bodySmall?.copyWith(color: Colors.white.withValues(alpha: 0.9)),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildRow(AppPermission permission) {
+    final theme = Theme.of(context);
     final state = _device[permission] ?? PermissionState.unavailable;
     final saved = widget.syncService.serverStatuses[permission] ?? SyncedPermissionStatus.unknown;
-    return ListTile(
+    return AppCard(
       key: ValueKey('permission-${permission.name}'),
-      leading: Icon(_icon(permission)),
-      title: Text(permission.label),
-      subtitle: Text('${_statusLabel(state)} · Saved to account: ${_syncedLabel(saved)}'),
-      trailing: _busy == permission
-          ? const SizedBox.square(dimension: 24, child: CircularProgressIndicator(strokeWidth: 2))
-          : _buildAction(permission, state),
+      padding: const EdgeInsets.fromLTRB(14, 14, 12, 14),
+      child: Row(
+        children: [
+          IconBadge(icon: _icon(permission), gradient: _gradient(permission), size: 46),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(permission.label, style: theme.textTheme.titleMedium),
+                const SizedBox(height: 4),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: StatusDot(color: _statusColor(state)),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '${_statusLabel(state)} · Saved to account: ${_syncedLabel(saved)}',
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 220),
+            child: _busy == permission
+                ? const Padding(
+                    padding: EdgeInsets.all(8),
+                    child: SizedBox.square(dimension: 24, child: CircularProgressIndicator(strokeWidth: 2.5)),
+                  )
+                : _buildAction(permission, state),
+          ),
+        ],
+      ),
     );
   }
 
   Widget _buildAction(AppPermission permission, PermissionState state) {
     final enabled = _busy == null;
+    const compact = Size(0, 40);
+    const padding = EdgeInsets.symmetric(horizontal: 16);
     return switch (state) {
       PermissionState.denied => FilledButton(
+          key: const ValueKey('allow'),
+          style: FilledButton.styleFrom(minimumSize: compact, padding: padding),
           onPressed: enabled ? () => _onRowAction(permission) : null,
           child: const Text('Allow'),
         ),
       PermissionState.granted || PermissionState.limited => OutlinedButton(
+          key: const ValueKey('manage'),
+          style: OutlinedButton.styleFrom(minimumSize: compact, padding: padding),
           onPressed: enabled ? () => _onRowAction(permission) : null,
           child: const Text('Manage'),
         ),
       PermissionState.permanentlyDenied => OutlinedButton(
+          key: const ValueKey('settings'),
+          style: OutlinedButton.styleFrom(
+            minimumSize: compact,
+            padding: padding,
+            foregroundColor: AppColors.danger,
+            side: BorderSide(color: AppColors.danger.withValues(alpha: 0.4)),
+          ),
           onPressed: enabled ? () => _onRowAction(permission) : null,
           child: const Text('Open settings'),
         ),
@@ -257,14 +393,29 @@ class _PermissionsScreenState extends State<PermissionsScreen> {
     };
   }
 
-  static IconData _icon(AppPermission permission) => switch (permission) {
-        AppPermission.location => Icons.location_on_outlined,
-        AppPermission.microphone => Icons.mic_none,
-        AppPermission.camera => Icons.photo_camera_outlined,
-        AppPermission.photos => Icons.photo_library_outlined,
-        AppPermission.notifications => Icons.notifications_none,
+  static Color _statusColor(PermissionState state) => switch (state) {
+        PermissionState.granted => AppColors.success,
+        PermissionState.limited => AppColors.warning,
+        PermissionState.denied => AppColors.inkMuted,
+        PermissionState.permanentlyDenied => AppColors.danger,
+        PermissionState.restricted || PermissionState.unavailable => const Color(0xFFB0B3C7),
       };
 
+  static LinearGradient _gradient(AppPermission permission) => switch (permission) {
+        AppPermission.location => AppGradients.location,
+        AppPermission.microphone => AppGradients.microphone,
+        AppPermission.camera => AppGradients.profile,
+        AppPermission.photos => AppGradients.photos,
+        AppPermission.notifications => AppGradients.notifications,
+      };
+
+  static IconData _icon(AppPermission permission) => switch (permission) {
+        AppPermission.location => Icons.location_on_rounded,
+        AppPermission.microphone => Icons.mic_rounded,
+        AppPermission.camera => Icons.photo_camera_rounded,
+        AppPermission.photos => Icons.photo_library_rounded,
+        AppPermission.notifications => Icons.notifications_rounded,
+      };
   static String _statusLabel(PermissionState state) => switch (state) {
         PermissionState.granted => 'Allowed',
         PermissionState.limited => 'Limited',

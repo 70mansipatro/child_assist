@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/api/api_client.dart';
 import '../../../core/permissions/permission_service.dart';
+import '../../../core/widgets/widgets.dart';
 import '../../permissions/services/permission_sync_service.dart';
 import '../services/photo_gallery_service.dart';
 import '../widgets/photo_grid.dart';
@@ -235,8 +236,9 @@ class _PhotosScreenState extends State<PhotosScreen> {
           IconButton(
             tooltip: 'Refresh',
             onPressed: _askingOs ? null : () => _checkPermission(),
-            icon: const Icon(Icons.refresh),
+            icon: const Icon(Icons.refresh_rounded),
           ),
+          const SizedBox(width: 8),
         ],
       ),
       body: SafeArea(
@@ -252,23 +254,30 @@ class _PhotosScreenState extends State<PhotosScreen> {
   Widget _buildNoAccess(PermissionState state) {
     return switch (state) {
       PermissionState.denied => _Message(
-          icon: Icons.photo_library_outlined,
+          icon: Icons.photo_library_rounded,
           title: 'Photo access is needed to show your gallery.',
           body: 'Child Assist only reads your photos on this device to show them here. '
               'They are not uploaded.',
-          action: FilledButton(
+          action: GradientButton(
+            gradient: AppGradients.photos,
             onPressed: _askingOs ? null : _allowPhotos,
-            child: const Text('Allow Photos'),
+            label: const Text('Allow Photos'),
           ),
         ),
       PermissionState.permanentlyDenied => _Message(
-          icon: Icons.block,
+          icon: Icons.block_rounded,
+          gradient: AppGradients.danger,
           title: 'Photo access is currently blocked.',
           body: 'You can enable it later from Settings.',
-          action: FilledButton(onPressed: _openSettings, child: const Text('Open Settings')),
+          action: GradientButton(
+            gradient: AppGradients.photos,
+            onPressed: _openSettings,
+            icon: const Icon(Icons.settings_outlined),
+            label: const Text('Open Settings'),
+          ),
         ),
       PermissionState.restricted => const _Message(
-          icon: Icons.lock_outline,
+          icon: Icons.lock_outline_rounded,
           title: 'Photo access is restricted on this device.',
           body: 'It is limited by a device setting (for example parental controls) and cannot be '
               'changed from the app.',
@@ -283,6 +292,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
   Widget _buildGallery(BuildContext context) {
     final visible = _visible;
     final searching = _query.trim().isNotEmpty;
+    final theme = Theme.of(context);
     return CustomScrollView(
       controller: _scroll,
       physics: const AlwaysScrollableScrollPhysics(),
@@ -298,10 +308,15 @@ class _PhotosScreenState extends State<PhotosScreen> {
           SliverFillRemaining(
             hasScrollBody: false,
             child: _Message(
-              icon: Icons.error_outline,
+              icon: Icons.error_outline_rounded,
+              gradient: AppGradients.danger,
               title: 'Unable to load photos.',
               body: 'Please try again.',
-              action: FilledButton(onPressed: _reload, child: const Text('Retry')),
+              action: GradientButton(
+                gradient: AppGradients.photos,
+                onPressed: _reload,
+                label: const Text('Retry'),
+              ),
             ),
           )
         else if (_photos.isEmpty)
@@ -309,7 +324,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
             hasScrollBody: false,
             child: _range != null
                 ? const _Message(
-                    icon: Icons.event_busy,
+                    icon: Icons.event_busy_rounded,
                     title: 'No photos in these dates',
                     body: 'Try a different date range.',
                   )
@@ -320,19 +335,33 @@ class _PhotosScreenState extends State<PhotosScreen> {
                   ),
           )
         else ...[
-          if (searching)
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                child: Text(
-                  visible.isEmpty
-                      ? 'No loaded photos have a name containing "${_query.trim()}".'
-                      : '${visible.length} of ${_photos.length} loaded photos match.',
-                ),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 10),
+              child: Row(
+                children: [
+                  Icon(
+                    searching ? Icons.manage_search_rounded : Icons.collections_rounded,
+                    size: 18,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      searching
+                          ? visible.isEmpty
+                              ? 'No loaded photos have a name containing "${_query.trim()}".'
+                              : '${visible.length} of ${_photos.length} loaded photos match.'
+                          : 'Newest first',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ),
+                ],
               ),
             ),
+          ),
           SliverPadding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 16),
             sliver: PhotoGrid(photos: visible, galleryService: _gallery, onTap: _openPhoto),
           ),
           SliverToBoxAdapter(child: _buildFooter()),
@@ -344,27 +373,37 @@ class _PhotosScreenState extends State<PhotosScreen> {
   Widget _buildFilters(BuildContext context) {
     final l10n = MaterialLocalizations.of(context);
     final range = _range;
+    final theme = Theme.of(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          TextField(
-            decoration: const InputDecoration(
-              hintText: 'Search photos by name...',
-              prefixIcon: Icon(Icons.search),
-              border: OutlineInputBorder(),
-              isDense: true,
+          DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(AppSpacing.radius),
+              boxShadow: AppTheme.softShadow(context),
             ),
-            textInputAction: TextInputAction.search,
-            onChanged: (value) => setState(() => _query = value),
+            child: TextField(
+              decoration: InputDecoration(
+                hintText: 'Search photos by name...',
+                prefixIcon: const Icon(Icons.search_rounded),
+                fillColor: theme.colorScheme.surface,
+                contentPadding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+              textInputAction: TextInputAction.search,
+              onChanged: (value) => setState(() => _query = value),
+            ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           Wrap(
             spacing: 8,
+            runSpacing: 8,
             children: [
               ActionChip(
-                avatar: const Icon(Icons.date_range, size: 18),
+                avatar: const Icon(Icons.calendar_month_rounded, size: 18),
+                backgroundColor: range == null ? null : AppColors.pink.withValues(alpha: 0.12),
+                side: range == null ? null : BorderSide(color: AppColors.pink.withValues(alpha: 0.4)),
                 label: Text(range == null
                     ? 'Any date'
                     : '${l10n.formatShortDate(range.start)} – ${l10n.formatShortDate(range.end)}'),
@@ -372,7 +411,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
               ),
               if (range != null)
                 ActionChip(
-                  avatar: const Icon(Icons.close, size: 18),
+                  avatar: const Icon(Icons.close_rounded, size: 18),
                   label: const Text('Clear dates'),
                   onPressed: _clearDates,
                 ),
@@ -384,30 +423,22 @@ class _PhotosScreenState extends State<PhotosScreen> {
   }
 
   Widget _buildLimitedBanner() {
-    return Card(
-      margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              "You've allowed access to selected photos only. Only those photos are shown here.",
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 4,
-              children: [
-                OutlinedButton(
-                  onPressed: _askingOs ? null : _changeSelection,
-                  child: const Text('Select more photos'),
-                ),
-                TextButton(onPressed: _openSettings, child: const Text('Open Settings')),
-              ],
-            ),
-          ],
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      child: InfoBanner(
+        tone: BannerTone.warning,
+        icon: Icons.photo_filter_outlined,
+        message: const Text(
+          "You've allowed access to selected photos only. Only those photos are shown here.",
         ),
+        actions: [
+          OutlinedButton(
+            style: OutlinedButton.styleFrom(minimumSize: const Size(0, 40)),
+            onPressed: _askingOs ? null : _changeSelection,
+            child: const Text('Select more photos'),
+          ),
+          TextButton(onPressed: _openSettings, child: const Text('Open Settings')),
+        ],
       ),
     );
   }
@@ -424,45 +455,35 @@ class _PhotosScreenState extends State<PhotosScreen> {
         ],
       );
     } else if (_hasMore) {
-      child = OutlinedButton(onPressed: _loadNext, child: const Text('Load more'));
+      child = OutlinedButton.icon(
+        onPressed: _loadNext,
+        icon: const Icon(Icons.expand_more_rounded),
+        label: const Text('Load more'),
+      );
     } else {
       child = const SizedBox.shrink();
     }
-    return Padding(padding: const EdgeInsets.all(16), child: Center(child: child));
+    return Padding(padding: const EdgeInsets.all(20), child: Center(child: child));
   }
 }
 
 class _Message extends StatelessWidget {
-  const _Message({required this.icon, required this.title, this.body, this.action});
+  const _Message({
+    required this.icon,
+    required this.title,
+    this.body,
+    this.action,
+    this.gradient = AppGradients.photos,
+  });
 
   final IconData icon;
   final String title;
   final String? body;
   final Widget? action;
+  final Gradient gradient;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 400),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ExcludeSemantics(child: Icon(icon, size: 56, color: theme.colorScheme.primary)),
-              const SizedBox(height: 16),
-              Text(title, style: theme.textTheme.titleMedium, textAlign: TextAlign.center),
-              if (body != null) ...[
-                const SizedBox(height: 8),
-                Text(body!, style: theme.textTheme.bodyMedium, textAlign: TextAlign.center),
-              ],
-              if (action != null) ...[const SizedBox(height: 20), action!],
-            ],
-          ),
-        ),
-      ),
-    );
+    return StateMessage(icon: icon, title: title, body: body, action: action, gradient: gradient);
   }
 }

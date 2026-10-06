@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/api/api_client.dart';
+import '../../../core/widgets/widgets.dart';
 import '../models/profile.dart';
 import '../services/profile_service.dart';
 
@@ -55,9 +56,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final hasProfile = _profile != null;
     return Scaffold(
-      appBar: AppBar(title: const Text('Profile')),
-      body: SafeArea(child: _buildBody(context)),
+      extendBodyBehindAppBar: hasProfile,
+      appBar: AppBar(
+        title: const Text('Profile'),
+        foregroundColor: hasProfile ? Colors.white : null,
+        titleTextStyle: hasProfile
+            ? Theme.of(context).appBarTheme.titleTextStyle?.copyWith(color: Colors.white)
+            : null,
+      ),
+      body: _buildBody(context),
     );
   }
 
@@ -67,61 +76,198 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
     final profile = _profile;
     if (profile == null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(_error ?? 'Could not load your profile.', textAlign: TextAlign.center),
-              const SizedBox(height: 16),
-              OutlinedButton(onPressed: _load, child: const Text('Try again')),
-            ],
+      return SafeArea(
+        child: StateMessage(
+          icon: Icons.person_off_outlined,
+          gradient: AppGradients.profile,
+          title: 'Profile unavailable',
+          body: _error ?? 'Could not load your profile.',
+          action: OutlinedButton.icon(
+            onPressed: _load,
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('Try again'),
           ),
         ),
       );
     }
 
+    final theme = Theme.of(context);
+    final hasName = profile.name?.isNotEmpty == true;
     return ListView(
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.zero,
       children: [
-        Center(child: _ProfileAvatar(profile: profile)),
-        const SizedBox(height: 24),
-        ListTile(
-          leading: const Icon(Icons.badge_outlined),
-          title: const Text('Name'),
-          subtitle: Text(profile.name?.isNotEmpty == true ? profile.name! : 'Not set'),
+        HeroHeader(
+          gradient: AppGradients.hero,
+          padding: EdgeInsets.fromLTRB(24, MediaQuery.paddingOf(context).top + kToolbarHeight + 8, 24, 64),
+          child: Column(
+            children: [
+              PopIn(child: _ProfileAvatar(profile: profile, onEdit: _editProfile)),
+              const SizedBox(height: 14),
+              FadeSlideIn(
+                child: Text(
+                  'My Account',
+                  style: theme.textTheme.titleMedium?.copyWith(color: Colors.white.withValues(alpha: 0.9)),
+                ),
+              ),
+            ],
+          ),
         ),
-        ListTile(
-          leading: const Icon(Icons.email_outlined),
-          title: const Text('Email'),
-          subtitle: Text(profile.email),
-        ),
-        const SizedBox(height: 24),
-        FilledButton.icon(
-          onPressed: _editProfile,
-          icon: const Icon(Icons.edit),
-          label: const Text('Edit Profile'),
+        Transform.translate(
+          offset: const Offset(0, -40),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 520),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    FadeSlideIn(
+                      index: 1,
+                      child: AppCard(
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        child: Column(
+                          children: [
+                            _InfoRow(
+                              icon: Icons.badge_outlined,
+                              gradient: AppGradients.profile,
+                              label: 'Name',
+                              value: hasName ? profile.name! : 'Not set',
+                              muted: !hasName,
+                            ),
+                            Divider(indent: 72, endIndent: 16, color: theme.colorScheme.outlineVariant),
+                            _InfoRow(
+                              icon: Icons.mail_outline_rounded,
+                              gradient: AppGradients.notifications,
+                              label: 'Email',
+                              value: profile.email,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    FadeSlideIn(
+                      index: 2,
+                      child: GradientButton(
+                        onPressed: _editProfile,
+                        icon: const Icon(Icons.edit_rounded, size: 20),
+                        label: const Text('Edit Profile'),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    FadeSlideIn(
+                      index: 3,
+                      child: InfoBanner(
+                        icon: Icons.shield_outlined,
+                        message: const Text(
+                          'Your profile is only visible to you. Only your name can be changed here.',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ),
       ],
     );
   }
 }
 
+class _InfoRow extends StatelessWidget {
+  const _InfoRow({
+    required this.icon,
+    required this.gradient,
+    required this.label,
+    required this.value,
+    this.muted = false,
+  });
+
+  final IconData icon;
+  final Gradient gradient;
+  final String label;
+  final String value;
+  final bool muted;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          IconBadge(icon: icon, gradient: gradient, size: 42, glow: false),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label, style: theme.textTheme.labelMedium),
+                const SizedBox(height: 2),
+                Text(
+                  value,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    color: muted ? theme.colorScheme.onSurfaceVariant : null,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Shows the profile image if one is set, otherwise (or if it fails to load) a placeholder.
+/// A gradient ring frames it and a small pencil badge opens the editor.
 class _ProfileAvatar extends StatelessWidget {
-  const _ProfileAvatar({required this.profile});
+  const _ProfileAvatar({required this.profile, required this.onEdit});
 
   final Profile profile;
+  final VoidCallback onEdit;
 
   @override
   Widget build(BuildContext context) {
     final url = profile.profileImageUrl;
-    return CircleAvatar(
-      radius: 48,
-      foregroundImage: url != null ? NetworkImage(url) : null,
-      onForegroundImageError: url != null ? (_, _) {} : null,
-      child: const Icon(Icons.person, size: 48),
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: const LinearGradient(colors: [Colors.white, Color(0xFFD9D4FF)]),
+            boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.18), blurRadius: 24, offset: const Offset(0, 10))],
+          ),
+          child: CircleAvatar(
+            radius: 50,
+            backgroundColor: const Color(0xFFEDEBFF),
+            foregroundColor: AppColors.primary,
+            foregroundImage: url != null ? NetworkImage(url) : null,
+            onForegroundImageError: url != null ? (_, _) {} : null,
+            child: const Icon(Icons.person, size: 52),
+          ),
+        ),
+        Positioned(
+          right: 0,
+          bottom: 4,
+          child: Material(
+            color: AppColors.amber,
+            shape: const CircleBorder(side: BorderSide(color: Colors.white, width: 3)),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: onEdit,
+              child: const Padding(
+                padding: EdgeInsets.all(7),
+                child: Icon(Icons.edit_rounded, size: 16, color: Colors.white, semanticLabel: 'Edit name'),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -167,13 +313,18 @@ class _EditNameDialogState extends State<_EditNameDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      icon: const IconBadge(icon: Icons.edit_rounded, gradient: AppGradients.profile, size: 52),
       title: const Text('Edit Profile'),
       content: Form(
         key: _formKey,
         child: TextFormField(
           controller: _nameController,
           autofocus: true,
-          decoration: InputDecoration(labelText: 'Name', errorText: _error),
+          decoration: InputDecoration(
+            labelText: 'Name',
+            prefixIcon: const Icon(Icons.person_outline_rounded),
+            errorText: _error,
+          ),
           textCapitalization: TextCapitalization.words,
           maxLength: ProfileService.maxNameLength,
           textInputAction: TextInputAction.done,
@@ -181,6 +332,7 @@ class _EditNameDialogState extends State<_EditNameDialog> {
           validator: (v) => (v == null || v.trim().isEmpty) ? 'Name is required' : null,
         ),
       ),
+      actionsPadding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
       actions: [
         TextButton(
           onPressed: _saving ? null : () => Navigator.of(context).pop(),

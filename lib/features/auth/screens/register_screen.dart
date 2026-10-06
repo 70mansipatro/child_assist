@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/api/api_client.dart';
+import '../../../core/widgets/widgets.dart';
 import '../services/auth_service.dart';
+import '../widgets/auth_widgets.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key, required this.authService});
@@ -20,6 +22,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _submitting = false;
+  bool _obscure = true;
   String? _error;
   Map<String, String> _fieldErrors = const {};
 
@@ -60,74 +63,110 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('Create account')),
-      body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: Form(
-              key: _formKey,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  TextFormField(
-                    controller: _nameController,
-                    decoration: InputDecoration(labelText: 'Name', errorText: _fieldErrors['name']),
-                    textCapitalization: TextCapitalization.words,
-                    autofillHints: const [AutofillHints.name],
-                    textInputAction: TextInputAction.next,
-                    validator: (v) =>
-                        (v == null || v.trim().isEmpty) ? 'Please enter your name' : null,
-                  ),
-                  const SizedBox(height: 12),
-                  TextFormField(
-                    controller: _emailController,
-                    decoration:
-                        InputDecoration(labelText: 'Email', errorText: _fieldErrors['email']),
-                    keyboardType: TextInputType.emailAddress,
-                    autofillHints: const [AutofillHints.email],
-                    textInputAction: TextInputAction.next,
-                    validator: (v) {
-                      final value = v?.trim() ?? '';
-                      if (value.isEmpty) return 'Please enter your email';
-                      if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(value)) {
-                        return 'Please enter a valid email';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 12),
-                  TextFormField(
-                    controller: _passwordController,
-                    decoration: InputDecoration(
-                      labelText: 'Password',
-                      helperText: 'At least $_minPasswordLength characters',
-                      errorText: _fieldErrors['password'],
-                    ),
-                    obscureText: true,
-                    autofillHints: const [AutofillHints.newPassword],
-                    textInputAction: TextInputAction.done,
-                    onFieldSubmitted: (_) => _submitting ? null : _submit(),
-                    validator: (v) => (v == null || v.length < _minPasswordLength)
-                        ? 'Password must be at least $_minPasswordLength characters'
-                        : null,
-                  ),
-                  if (_error != null && _fieldErrors.isEmpty) ...[
-                    const SizedBox(height: 16),
-                    Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
-                  ],
-                  const SizedBox(height: 24),
-                  FilledButton(
-                    onPressed: _submitting ? null : _submit,
-                    child: _submitting
-                        ? const SizedBox(
-                            height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Text('Register'),
-                  ),
-                ],
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(foregroundColor: Colors.white),
+      body: AuthBackdrop(
+        headerHeight: 250,
+        top: kToolbarHeight,
+        child: Form(
+          key: _formKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const AuthBrand(
+                showLogo: false,
+                title: 'Create account',
+                subtitle: 'Join Child Assist in less than a minute.',
               ),
-            ),
+              const SizedBox(height: 20),
+              FadeSlideIn(
+                index: 1,
+                child: AppCard(
+                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      TextFormField(
+                        controller: _nameController,
+                        decoration: InputDecoration(
+                          labelText: 'Name',
+                          prefixIcon: const Icon(Icons.person_outline_rounded),
+                          errorText: _fieldErrors['name'],
+                        ),
+                        textCapitalization: TextCapitalization.words,
+                        autofillHints: const [AutofillHints.name],
+                        textInputAction: TextInputAction.next,
+                        validator: (v) =>
+                            (v == null || v.trim().isEmpty) ? 'Please enter your name' : null,
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _emailController,
+                        decoration: InputDecoration(
+                          labelText: 'Email',
+                          prefixIcon: const Icon(Icons.alternate_email_rounded),
+                          errorText: _fieldErrors['email'],
+                        ),
+                        keyboardType: TextInputType.emailAddress,
+                        autofillHints: const [AutofillHints.email],
+                        textInputAction: TextInputAction.next,
+                        validator: (v) {
+                          final value = v?.trim() ?? '';
+                          if (value.isEmpty) return 'Please enter your email';
+                          if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(value)) {
+                            return 'Please enter a valid email';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _passwordController,
+                        decoration: InputDecoration(
+                          labelText: 'Password',
+                          prefixIcon: const Icon(Icons.lock_outline_rounded),
+                          suffixIcon: PasswordVisibilityToggle(
+                            obscured: _obscure,
+                            onPressed: () => setState(() => _obscure = !_obscure),
+                          ),
+                          helperText: 'At least $_minPasswordLength characters',
+                          errorText: _fieldErrors['password'],
+                        ),
+                        obscureText: _obscure,
+                        autofillHints: const [AutofillHints.newPassword],
+                        textInputAction: TextInputAction.done,
+                        onFieldSubmitted: (_) => _submitting ? null : _submit(),
+                        validator: (v) => (v == null || v.length < _minPasswordLength)
+                            ? 'Password must be at least $_minPasswordLength characters'
+                            : null,
+                      ),
+                      AuthError(message: _fieldErrors.isEmpty ? _error : null),
+                      const SizedBox(height: 18),
+                      GradientButton(
+                        onPressed: _submitting ? null : _submit,
+                        label: _submitting ? const ButtonSpinner() : const Text('Register'),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.verified_user_outlined, size: 16, color: theme.colorScheme.onSurfaceVariant),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Text(
+                              'Your details stay private to your account.',
+                              style: theme.textTheme.bodySmall,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),

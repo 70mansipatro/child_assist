@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import '../../../core/widgets/motion.dart';
 import '../services/photo_gallery_service.dart';
 
 /// A sliver grid of square photo thumbnails. Column count follows the available width, and
@@ -23,8 +24,8 @@ class PhotoGrid extends StatelessWidget {
     return SliverGrid.builder(
       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
         maxCrossAxisExtent: 130,
-        mainAxisSpacing: 4,
-        crossAxisSpacing: 4,
+        mainAxisSpacing: 8,
+        crossAxisSpacing: 8,
       ),
       itemCount: photos.length,
       itemBuilder: (context, index) => PhotoThumbnail(
@@ -69,35 +70,58 @@ class _PhotoThumbnailState extends State<PhotoThumbnail> {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final date = MaterialLocalizations.of(context).formatMediumDate(widget.photo.createdAt);
+    final radius = BorderRadius.circular(14);
     return Semantics(
       button: true,
       label: 'Photo from $date',
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: Material(
-          color: colors.surfaceContainerHighest,
-          child: InkWell(
-            onTap: widget.onTap,
-            child: FutureBuilder<Uint8List?>(
-              future: _bytes,
-              builder: (context, snapshot) {
-                final bytes = snapshot.data;
-                if (bytes != null) {
-                  return Ink.image(
-                    image: ResizeImage(
-                      MemoryImage(bytes),
-                      width: PhotoGalleryService.thumbnailSize,
-                      policy: ResizeImagePolicy.fit,
-                    ),
-                    fit: BoxFit.cover,
+      child: PressableScale(
+        scale: 0.95,
+        child: ClipRRect(
+          borderRadius: radius,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              ColoredBox(color: colors.surfaceContainerHighest),
+              FutureBuilder<Uint8List?>(
+                future: _bytes,
+                builder: (context, snapshot) {
+                  final bytes = snapshot.data;
+                  if (bytes != null) {
+                    return Image(
+                      image: ResizeImage(
+                        MemoryImage(bytes),
+                        width: PhotoGalleryService.thumbnailSize,
+                        policy: ResizeImagePolicy.fit,
+                      ),
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                      excludeFromSemantics: true,
+                      // Thumbnails fade in as they decode instead of popping in.
+                      frameBuilder: (context, child, frame, sync) => sync
+                          ? child
+                          : AnimatedOpacity(
+                              opacity: frame == null ? 0 : 1,
+                              duration: const Duration(milliseconds: 280),
+                              curve: Curves.easeOut,
+                              child: child,
+                            ),
+                      errorBuilder: (_, _, _) =>
+                          Center(child: Icon(Icons.broken_image_outlined, color: colors.outline)),
+                    );
+                  }
+                  if (snapshot.connectionState == ConnectionState.done) {
+                    return Center(child: Icon(Icons.broken_image_outlined, color: colors.outline));
+                  }
+                  return Center(
+                    child: Icon(Icons.image_outlined, color: colors.outline.withValues(alpha: 0.6)),
                   );
-                }
-                if (snapshot.connectionState == ConnectionState.done) {
-                  return Center(child: Icon(Icons.broken_image_outlined, color: colors.outline));
-                }
-                return const SizedBox.expand();
-              },
-            ),
+                },
+              ),
+              Material(
+                type: MaterialType.transparency,
+                child: InkWell(onTap: widget.onTap),
+              ),
+            ],
           ),
         ),
       ),

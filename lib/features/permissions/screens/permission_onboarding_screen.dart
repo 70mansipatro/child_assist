@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/api/api_client.dart';
 import '../../../core/permissions/permission_service.dart';
+import '../../../core/widgets/widgets.dart';
 import '../../auth/services/auth_service.dart';
 import '../models/permission_onboarding.dart';
 import '../services/permission_onboarding_service.dart';
@@ -188,124 +189,177 @@ class _PermissionOnboardingScreenState extends State<PermissionOnboardingScreen>
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final colors = theme.colorScheme;
     final finishing = _finishingPhase;
     final title = finishing ? 'Almost done' : _step.title;
-    final icon = finishing ? Icons.check_circle_outline : _step.icon;
+    final icon = finishing ? Icons.check_rounded : _step.icon;
+    final gradient = finishing ? AppGradients.location : _gradientFor(_step.permission);
 
     return Scaffold(
-      body: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Align(
-              alignment: Alignment.centerRight,
-              child: Padding(
-                padding: const EdgeInsets.all(8),
-                child: TextButton(
-                  onPressed: widget.authService.logout,
-                  child: const Text('Log out'),
+      body: Stack(
+        children: [
+          // A soft wash of the step's colour behind the stage; it cross-fades between steps.
+          Positioned.fill(
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 600),
+              curve: Curves.easeOutCubic,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    gradient.colors.first.withValues(alpha: theme.brightness == Brightness.dark ? 0.22 : 0.14),
+                    theme.scaffoldBackgroundColor,
+                  ],
+                  stops: const [0, 0.65],
                 ),
               ),
             ),
-            Expanded(
-              child: Center(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 420),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        ExcludeSemantics(
-                          child: CircleAvatar(
-                            radius: 48,
-                            backgroundColor: colors.primaryContainer,
-                            child: Icon(icon, size: 48, color: colors.onPrimaryContainer),
-                          ),
-                        ),
-                        const SizedBox(height: 24),
-                        Semantics(
-                          header: true,
-                          child: Text(
-                            title,
-                            style: theme.textTheme.headlineSmall?.copyWith(
-                              fontWeight: FontWeight.w600,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          finishing ? 'Saving your choices to your account.' : _step.description,
-                          style: theme.textTheme.bodyLarge,
-                          textAlign: TextAlign.center,
-                        ),
-                        ..._buildStatus(theme),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 420),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
+          ),
+          SafeArea(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 8, 8, 0),
+                  child: Row(
                     children: [
-                      ..._buildActions(),
-                      const SizedBox(height: 20),
-                      _ProgressDots(current: _index, total: _steps.length),
+                      const AppLogo(size: 34),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text('Quick setup', style: theme.textTheme.titleSmall),
+                      ),
+                      TextButton(
+                        onPressed: widget.authService.logout,
+                        child: const Text('Log out'),
+                      ),
                     ],
                   ),
                 ),
-              ),
+                Expanded(
+                  child: Center(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 420),
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 450),
+                          switchInCurve: Curves.easeOutCubic,
+                          switchOutCurve: Curves.easeInCubic,
+                          transitionBuilder: (child, animation) => FadeTransition(
+                            opacity: animation,
+                            child: SlideTransition(
+                              position: Tween(begin: const Offset(0.08, 0), end: Offset.zero).animate(animation),
+                              child: child,
+                            ),
+                          ),
+                          layoutBuilder: (current, previous) => Stack(
+                            alignment: Alignment.center,
+                            children: [...previous, ?current],
+                          ),
+                          child: Column(
+                            key: ValueKey(finishing ? 'finish' : 'step-$_index'),
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _IconStage(icon: icon, gradient: gradient),
+                              const SizedBox(height: 28),
+                              Semantics(
+                                header: true,
+                                child: Text(
+                                  title,
+                                  style: theme.textTheme.headlineSmall,
+                                  textAlign: TextAlign.center,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                finishing ? 'Saving your choices to your account.' : _step.description,
+                                style: theme.textTheme.bodyLarge?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                                textAlign: TextAlign.center,
+                              ),
+                              ..._buildStatus(theme),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 420),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          ..._buildActions(gradient),
+                          const SizedBox(height: 18),
+                          _ProgressDots(current: _index, total: _steps.length, color: gradient.colors.last),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
+  static LinearGradient _gradientFor(AppPermission permission) => switch (permission) {
+        AppPermission.location => AppGradients.location,
+        AppPermission.camera => AppGradients.profile,
+        AppPermission.microphone => AppGradients.microphone,
+        AppPermission.photos => AppGradients.photos,
+        AppPermission.notifications => AppGradients.notifications,
+      };
+
   List<Widget> _buildStatus(ThemeData theme) {
-    final error = TextStyle(color: theme.colorScheme.error, fontSize: 16);
     final Widget? message = switch (_phase) {
       _Phase.explain => switch (_state) {
-        PermissionState.granted => const Text('This is already allowed on this device.'),
-        PermissionState.limited => const Text('Limited access is already allowed on this device.'),
+        PermissionState.granted => const InfoBanner(
+            tone: BannerTone.success,
+            message: Text('This is already allowed on this device.'),
+          ),
+        PermissionState.limited => const InfoBanner(
+            tone: BannerTone.success,
+            message: Text('Limited access is already allowed on this device.'),
+          ),
         _ => null,
       },
-      _Phase.blocked => Text(
-        _state == PermissionState.restricted
-            ? 'This permission is restricted on this device and cannot be changed from the app.'
-            : 'Permission is currently blocked.\n\nYou can enable it later from Settings.',
-        style: theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
-      ),
-      _Phase.saveFailed => Text(
-        'Could not save your choice to your account: $_error',
-        style: error,
-      ),
-      _Phase.finishFailed => Text('Could not finish setup: $_error', style: error),
+      _Phase.blocked => InfoBanner(
+          tone: BannerTone.warning,
+          icon: Icons.block_rounded,
+          message: Text(
+            _state == PermissionState.restricted
+                ? 'This permission is restricted on this device and cannot be changed from the app.'
+                : 'Permission is currently blocked.\n\nYou can enable it later from Settings.',
+            style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+          ),
+        ),
+      _Phase.saveFailed => InfoBanner(
+          tone: BannerTone.danger,
+          message: Text('Could not save your choice to your account: $_error'),
+        ),
+      _Phase.finishFailed => InfoBanner(
+          tone: BannerTone.danger,
+          message: Text('Could not finish setup: $_error'),
+        ),
       _ => null,
     };
     if (message == null) return const [];
     return [
-      const SizedBox(height: 20),
-      DefaultTextStyle.merge(textAlign: TextAlign.center, child: message),
+      const SizedBox(height: 22),
+      FadeSlideIn(offset: const Offset(0, 12), child: message),
     ];
   }
 
-  List<Widget> _buildActions() {
-    const minSize = Size.fromHeight(56);
-    FilledButton primary(String label, VoidCallback onPressed) => FilledButton(
-      style: FilledButton.styleFrom(minimumSize: minSize, textStyle: const TextStyle(fontSize: 18)),
-      onPressed: onPressed,
-      child: Text(label),
-    );
+  List<Widget> _buildActions(LinearGradient gradient) {
+    GradientButton primary(String label, VoidCallback onPressed) =>
+        GradientButton(gradient: gradient, onPressed: onPressed, label: Text(label));
 
     return switch (_phase) {
       _Phase.explain => [primary('Continue', _requestPermission)],
@@ -313,10 +367,11 @@ class _PermissionOnboardingScreenState extends State<PermissionOnboardingScreen>
         primary('Continue', _continueFromBlocked),
         if (_state == PermissionState.permanentlyDenied) ...[
           const SizedBox(height: 12),
-          OutlinedButton(
-            style: OutlinedButton.styleFrom(minimumSize: minSize),
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(54)),
             onPressed: _openSettings,
-            child: const Text('Open Settings'),
+            icon: const Icon(Icons.settings_outlined),
+            label: const Text('Open Settings'),
           ),
         ],
       ],
@@ -328,7 +383,7 @@ class _PermissionOnboardingScreenState extends State<PermissionOnboardingScreen>
           child: Center(
             child: Semantics(
               label: _phase == _Phase.requesting ? 'Waiting for your choice' : 'Please wait',
-              child: const CircularProgressIndicator(),
+              child: const CircularProgressIndicator(strokeCap: StrokeCap.round),
             ),
           ),
         ),
@@ -337,16 +392,57 @@ class _PermissionOnboardingScreenState extends State<PermissionOnboardingScreen>
   }
 }
 
-/// "● ● ○ ○ ○" plus "2 of 5". Screen readers hear "Step 2 of 5".
-class _ProgressDots extends StatelessWidget {
-  const _ProgressDots({required this.current, required this.total});
+/// The step's icon on a gradient disc, inside two soft rings, popping in on each step.
+class _IconStage extends StatelessWidget {
+  const _IconStage({required this.icon, required this.gradient});
 
-  final int current;
-  final int total;
+  final IconData icon;
+  final LinearGradient gradient;
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
+    final tint = gradient.colors.first;
+    return ExcludeSemantics(
+      child: PopIn(
+        from: 0.5,
+        child: Container(
+          width: 176,
+          height: 176,
+          decoration: BoxDecoration(shape: BoxShape.circle, color: tint.withValues(alpha: 0.08)),
+          alignment: Alignment.center,
+          child: Container(
+            width: 136,
+            height: 136,
+            decoration: BoxDecoration(shape: BoxShape.circle, color: tint.withValues(alpha: 0.14)),
+            alignment: Alignment.center,
+            child: Container(
+              width: 96,
+              height: 96,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: gradient,
+                boxShadow: AppTheme.glow(gradient.colors.last),
+              ),
+              child: Icon(icon, size: 46, color: Colors.white),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// An animated pill track ("━━ ● ● ●") plus "2 of 5". Screen readers hear "Step 2 of 5".
+class _ProgressDots extends StatelessWidget {
+  const _ProgressDots({required this.current, required this.total, required this.color});
+
+  final int current;
+  final int total;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Column(
       children: [
         ExcludeSemantics(
@@ -354,24 +450,25 @@ class _ProgressDots extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               for (var i = 0; i < total; i++)
-                Container(
-                  width: 12,
-                  height: 12,
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 400),
+                  curve: Curves.easeOutCubic,
+                  width: i == current ? 28 : 10,
+                  height: 10,
                   margin: const EdgeInsets.symmetric(horizontal: 4),
                   decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: i <= current ? colors.primary : null,
-                    border: Border.all(color: colors.primary, width: 2),
+                    borderRadius: BorderRadius.circular(5),
+                    color: i <= current ? color : theme.colorScheme.outlineVariant,
                   ),
                 ),
             ],
           ),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 10),
         Text(
           '${current + 1} of $total',
           semanticsLabel: 'Step ${current + 1} of $total',
-          style: Theme.of(context).textTheme.bodyMedium,
+          style: theme.textTheme.labelMedium,
         ),
       ],
     );

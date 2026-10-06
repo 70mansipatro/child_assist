@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/api/api_client.dart';
 import '../../../core/permissions/permission_service.dart';
+import '../../../core/widgets/widgets.dart';
 import '../../permissions/services/permission_sync_service.dart';
 import '../models/location_record.dart';
 import '../services/location_history_service.dart';
@@ -47,9 +48,11 @@ class _LocationScreenState extends State<LocationScreen> {
   void initState() {
     super.initState();
     // The user may change the permission or turn on location in Settings and come back.
-    _lifecycle = AppLifecycleListener(onResume: () {
-      if (!_locating) unawaited(_recheckAccess());
-    });
+    _lifecycle = AppLifecycleListener(
+      onResume: () {
+        if (!_locating) unawaited(_recheckAccess());
+      },
+    );
     _recheckAccess();
     _loadHistory();
   }
@@ -149,16 +152,13 @@ class _LocationScreenState extends State<LocationScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
+        icon: const IconBadge(icon: Icons.delete_outline_rounded, gradient: AppGradients.danger, size: 52),
         title: const Text('Clear Location History?'),
-        content: const Text(
-          'This will permanently delete your saved location history from Child Assist.',
-        ),
+        content: const Text('This will permanently delete your saved location history from Child Assist.'),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
-          ),
+          TextButton(onPressed: () => Navigator.of(dialogContext).pop(false), child: const Text('Cancel')),
           FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
             onPressed: () => Navigator.of(dialogContext).pop(true),
             child: const Text('Clear'),
           ),
@@ -171,9 +171,9 @@ class _LocationScreenState extends State<LocationScreen> {
     try {
       final deleted = await widget.historyService.clear();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(deleted == 1 ? 'Deleted 1 saved location' : 'Deleted $deleted saved locations'),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(deleted == 1 ? 'Deleted 1 saved location' : 'Deleted $deleted saved locations')),
+      );
       await _loadHistory();
     } on ApiException catch (e) {
       if (mounted) {
@@ -189,9 +189,9 @@ class _LocationScreenState extends State<LocationScreen> {
         ? await widget.locationService.openLocationSettings()
         : await widget.locationService.openAppSettings();
     if (!opened && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Open your device settings to change this.'),
-      ));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Open your device settings to change this.')));
     }
   }
 
@@ -206,74 +206,87 @@ class _LocationScreenState extends State<LocationScreen> {
           listenable: widget.historyService,
           builder: (context, _) {
             final records = widget.historyService.records;
-            return ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                Card.outlined(
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(Icons.privacy_tip_outlined, color: theme.colorScheme.primary),
-                        const SizedBox(width: 12),
-                        const Expanded(
-                          child: Text(
-                            'Your location is saved only when you choose to get your current '
-                            'location.\n\nChild Assist does not track your location continuously.',
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                _buildCurrentCard(theme),
-                if (_failure != null) ...[
-                  const SizedBox(height: 12),
-                  _buildFailureCard(theme, _failure!),
-                ],
-                const SizedBox(height: 12),
-                FilledButton.icon(
-                  onPressed: busy ? null : _getCurrentLocation,
-                  icon: _locating
-                      ? const SizedBox.square(
-                          dimension: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                      : Icon(_current == null ? Icons.my_location : Icons.refresh),
-                  label: Text(_locating
-                      ? 'Getting location...'
-                      : _current == null
-                          ? 'Get Current Location'
-                          : 'Refresh Location'),
-                ),
-                if (_saveError != null) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    _saveError!,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: theme.colorScheme.error),
-                  ),
-                ],
-                const SizedBox(height: 24),
-                Row(
+            return Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 640),
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
                   children: [
-                    Expanded(child: Text('Location History', style: theme.textTheme.titleMedium)),
-                    TextButton.icon(
-                      onPressed: busy || _historyLoading ? null : _loadHistory,
-                      icon: const Icon(Icons.refresh, size: 18),
-                      label: const Text('Refresh'),
+                    FadeSlideIn(
+                      child: InfoBanner(
+                        icon: Icons.privacy_tip_outlined,
+                        tone: BannerTone.success,
+                        message: const Text(
+                          'Your location is saved only when you choose to get your current '
+                          'location.\n\nChild Assist does not track your location continuously.',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    FadeSlideIn(index: 1, child: _buildCurrentCard(theme)),
+                    AnimatedSize(
+                      duration: const Duration(milliseconds: 280),
+                      curve: Curves.easeOutCubic,
+                      child: _failure == null
+                          ? const SizedBox(width: double.infinity)
+                          : Padding(
+                              padding: const EdgeInsets.only(top: 12),
+                              child: _buildFailureCard(theme, _failure!),
+                            ),
+                    ),
+                    const SizedBox(height: 16),
+                    FadeSlideIn(
+                      index: 2,
+                      child: GradientButton(
+                        gradient: AppGradients.location,
+                        onPressed: busy ? null : _getCurrentLocation,
+                        icon: _locating
+                            ? const ButtonSpinner(size: 18)
+                            : Icon(_current == null ? Icons.my_location_rounded : Icons.refresh_rounded),
+                        label: Text(
+                          _locating
+                              ? 'Getting location...'
+                              : _current == null
+                              ? 'Get Current Location'
+                              : 'Refresh Location',
+                        ),
+                      ),
+                    ),
+                    if (_saveError != null) ...[
+                      const SizedBox(height: 10),
+                      InfoBanner(tone: BannerTone.danger, message: Text(_saveError!)),
+                    ],
+                    const SizedBox(height: 28),
+                    SectionTitle(
+                      'Location History',
+                      subtitle: records.isEmpty
+                          ? null
+                          : records.length == 1
+                          ? '1 saved place'
+                          : '${records.length} saved places',
+                      trailing: TextButton.icon(
+                        onPressed: busy || _historyLoading ? null : _loadHistory,
+                        icon: const Icon(Icons.refresh_rounded, size: 18),
+                        label: const Text('Refresh'),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    ..._buildHistory(theme, records),
+                    const SizedBox(height: 16),
+                    OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.danger,
+                        side: BorderSide(
+                          color: AppColors.danger.withValues(alpha: busy || records.isEmpty ? 0.15 : 0.4),
+                        ),
+                      ),
+                      onPressed: busy || records.isEmpty ? null : _confirmClear,
+                      icon: const Icon(Icons.delete_outline_rounded),
+                      label: const Text('Clear Location History'),
                     ),
                   ],
                 ),
-                const SizedBox(height: 4),
-                ..._buildHistory(theme, records),
-                const SizedBox(height: 16),
-                OutlinedButton.icon(
-                  onPressed: busy || records.isEmpty ? null : _confirmClear,
-                  icon: const Icon(Icons.delete_outline),
-                  label: const Text('Clear Location History'),
-                ),
-              ],
+              ),
             );
           },
         ),
@@ -283,64 +296,176 @@ class _LocationScreenState extends State<LocationScreen> {
 
   Widget _buildCurrentCard(ThemeData theme) {
     final current = _current;
-    return Card(
+    const white = Colors.white;
+    final soft = white.withValues(alpha: 0.82);
+    return AppCard(
       key: const ValueKey('location-current'),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(children: [
-              Icon(Icons.location_on, color: theme.colorScheme.primary),
-              const SizedBox(width: 8),
-              Text('Current Location', style: theme.textTheme.titleMedium),
-            ]),
-            const SizedBox(height: 12),
-            if (_locating) ...[
-              Text('Getting location...', style: theme.textTheme.titleSmall),
-              const SizedBox(height: 4),
-              const Text('Please wait while we get your current location from your device.'),
-            ] else if (current == null)
-              const Text('Tap "Get Current Location" to see your real device location.')
-            else ...[
-              if (_saved) ...[
-                Row(children: [
-                  Icon(Icons.check_circle, size: 18, color: theme.colorScheme.primary),
-                  const SizedBox(width: 6),
-                  Text('Location updated', style: TextStyle(color: theme.colorScheme.primary)),
-                ]),
-                const SizedBox(height: 12),
-              ],
-              if (current.hasPlace) ...[
-                Text(current.placeName!, style: theme.textTheme.titleLarge),
-                if (current.areaLine != null) Text(current.areaLine!, style: theme.textTheme.bodyLarge),
-              ] else ...[
-                Text(
-                  '${formatCoordinate(current.latitude)}, ${formatCoordinate(current.longitude)}',
-                  style: theme.textTheme.titleLarge,
-                ),
-                Text('Place name unavailable', style: theme.textTheme.bodyMedium),
-              ],
+      gradient: AppGradients.location,
+      padding: const EdgeInsets.all(18),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned(
+            right: -30,
+            top: -30,
+            child: IgnorePointer(child: Icon(Icons.public_rounded, size: 150, color: white.withValues(alpha: 0.08))),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: white.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.location_on_rounded, color: white, size: 22),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text('Current Location', style: theme.textTheme.titleMedium?.copyWith(color: white)),
+                  ),
+                  if (_saved && !_locating)
+                    PopIn(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(color: white, borderRadius: BorderRadius.circular(20)),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.check_circle_rounded, size: 16, color: AppColors.success),
+                            const SizedBox(width: 5),
+                            Text(
+                              'Location updated',
+                              style: theme.textTheme.labelMedium?.copyWith(
+                                color: AppColors.success,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
               const SizedBox(height: 16),
-              _field(theme, 'Latitude', formatCoordinate(current.latitude)),
-              _field(theme, 'Longitude', formatCoordinate(current.longitude)),
-              _field(theme, 'Accuracy', formatAccuracy(current.accuracy)),
-              _field(theme, 'Updated', formatUpdated(current.capturedAt)),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 350),
+                switchInCurve: Curves.easeOutCubic,
+                layoutBuilder: (current, previous) =>
+                    Stack(alignment: Alignment.topLeft, children: [...previous, ?current]),
+                child: _locating
+                    ? Row(
+                        key: const ValueKey('locating'),
+                        children: [
+                          const PulseHalo(
+                            size: 72,
+                            color: white,
+                            child: Icon(Icons.my_location_rounded, color: white, size: 28),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Getting location...', style: theme.textTheme.titleSmall?.copyWith(color: white)),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Please wait while we get your current location from your device.',
+                                  style: theme.textTheme.bodySmall?.copyWith(color: soft),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      )
+                    : current == null
+                    ? Column(
+                        key: const ValueKey('empty'),
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Where am I?', style: theme.textTheme.headlineSmall?.copyWith(color: white)),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Tap "Get Current Location" to see your real device location.',
+                            style: theme.textTheme.bodyMedium?.copyWith(color: soft),
+                          ),
+                        ],
+                      )
+                    : Column(
+                        key: ValueKey(current.capturedAt),
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (current.hasPlace) ...[
+                            Text(current.placeName!, style: theme.textTheme.headlineSmall?.copyWith(color: white)),
+                            if (current.areaLine != null)
+                              Text(current.areaLine!, style: theme.textTheme.bodyLarge?.copyWith(color: soft)),
+                          ] else ...[
+                            Text(
+                              '${formatCoordinate(current.latitude)}, ${formatCoordinate(current.longitude)}',
+                              style: theme.textTheme.headlineSmall?.copyWith(color: white),
+                            ),
+                            Text('Place name unavailable', style: theme.textTheme.bodyMedium?.copyWith(color: soft)),
+                          ],
+                          const SizedBox(height: 16),
+                          LayoutBuilder(
+                            builder: (context, constraints) {
+                              final tileWidth = (constraints.maxWidth - 10) / 2;
+                              return Wrap(
+                                spacing: 10,
+                                runSpacing: 10,
+                                children: [
+                                  for (final (icon, label, value) in [
+                                    (Icons.north_rounded, 'Latitude', formatCoordinate(current.latitude)),
+                                    (Icons.east_rounded, 'Longitude', formatCoordinate(current.longitude)),
+                                    (Icons.gps_fixed_rounded, 'Accuracy', formatAccuracy(current.accuracy)),
+                                    (Icons.schedule_rounded, 'Updated', formatUpdated(current.capturedAt)),
+                                  ])
+                                    SizedBox(width: tileWidth, child: _field(theme, icon, label, value)),
+                                ],
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+              ),
             ],
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _field(ThemeData theme, String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+  /// A frosted stat tile on the current-location card.
+  Widget _field(ThemeData theme, IconData icon, String label, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+      ),
+      child: Row(
         children: [
-          Text(label, style: theme.textTheme.labelMedium),
-          Text(value, style: theme.textTheme.bodyLarge),
+          Icon(icon, size: 18, color: Colors.white.withValues(alpha: 0.85)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label, style: theme.textTheme.labelSmall?.copyWith(color: Colors.white.withValues(alpha: 0.8))),
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.titleSmall?.copyWith(color: Colors.white),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -349,111 +474,166 @@ class _LocationScreenState extends State<LocationScreen> {
   Widget _buildFailureCard(ThemeData theme, LocationFailure failure) {
     final (message, action) = switch (failure) {
       LocationFailure.permissionDenied => (
-          'Location permission is required to get your current location.',
-          ('Allow Location', _getCurrentLocation),
-        ),
-      LocationFailure.permissionPermanentlyDenied => (
-          'Location permission is blocked.\n\nPlease enable location access from your device Settings.',
-          ('Open Settings', () => _openSettings(failure)),
-        ),
-      LocationFailure.servicesDisabled => (
-          'Location services are turned off.\n\nPlease enable Location on your device.',
-          ('Open Settings', () => _openSettings(failure)),
-        ),
-      LocationFailure.permissionRestricted => (
-          'Location access is restricted on this device (for example by parental controls) '
-              'and cannot be changed from the app.',
-          null,
-        ),
-      LocationFailure.timeout || LocationFailure.unavailable => (
-          'Location is currently unavailable.\nPlease try again.',
-          null,
-        ),
-    };
-    return Card(
-      key: const ValueKey('location-failure'),
-      color: theme.colorScheme.errorContainer,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(message, style: TextStyle(color: theme.colorScheme.onErrorContainer)),
-            if (action != null) ...[
-              const SizedBox(height: 12),
-              FilledButton.tonal(
-                onPressed: _locating || _clearing ? null : action.$2,
-                child: Text(action.$1),
-              ),
-            ],
-          ],
-        ),
+        'Location permission is required to get your current location.',
+        ('Allow Location', _getCurrentLocation),
       ),
+      LocationFailure.permissionPermanentlyDenied => (
+        'Location permission is blocked.\n\nPlease enable location access from your device Settings.',
+        ('Open Settings', () => _openSettings(failure)),
+      ),
+      LocationFailure.servicesDisabled => (
+        'Location services are turned off.\n\nPlease enable Location on your device.',
+        ('Open Settings', () => _openSettings(failure)),
+      ),
+      LocationFailure.permissionRestricted => (
+        'Location access is restricted on this device (for example by parental controls) '
+            'and cannot be changed from the app.',
+        null,
+      ),
+      LocationFailure.timeout ||
+      LocationFailure.unavailable => ('Location is currently unavailable.\nPlease try again.', null),
+    };
+    final icon = switch (failure) {
+      LocationFailure.servicesDisabled => Icons.location_disabled_rounded,
+      LocationFailure.permissionPermanentlyDenied || LocationFailure.permissionRestricted => Icons.block_rounded,
+      LocationFailure.timeout || LocationFailure.unavailable => Icons.wifi_tethering_error_rounded,
+      LocationFailure.permissionDenied => Icons.location_off_rounded,
+    };
+    return InfoBanner(
+      key: const ValueKey('location-failure'),
+      tone: action == null ? BannerTone.warning : BannerTone.danger,
+      icon: icon,
+      message: Text(message),
+      actions: [
+        if (action != null)
+          FilledButton.tonal(
+            style: FilledButton.styleFrom(
+              minimumSize: const Size(0, 42),
+              backgroundColor: AppColors.danger.withValues(alpha: 0.14),
+              foregroundColor: AppColors.danger,
+            ),
+            onPressed: _locating || _clearing ? null : action.$2,
+            child: Text(action.$1),
+          ),
+      ],
     );
   }
 
   List<Widget> _buildHistory(ThemeData theme, List<LocationRecord> records) {
     if (_historyLoading && records.isEmpty) {
-      return const [Center(child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator()))];
+      return const [
+        Center(
+          child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator()),
+        ),
+      ];
     }
     return [
       if (_historyError != null)
         Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: Text(
-            'Could not load your location history: $_historyError',
-            style: TextStyle(color: theme.colorScheme.error),
+          padding: const EdgeInsets.only(bottom: 10),
+          child: InfoBanner(
+            tone: BannerTone.danger,
+            message: Text('Could not load your location history: $_historyError'),
           ),
         ),
       if (records.isEmpty && _historyError == null)
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          child: Column(
-            children: [
-              Icon(Icons.location_on_outlined, size: 36, color: theme.colorScheme.outline),
-              const SizedBox(height: 8),
-              Text('No location history yet.', style: theme.textTheme.titleSmall),
-              const SizedBox(height: 4),
-              Text(
-                'Your saved locations will appear here after you get your current location.',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodyMedium,
-              ),
-            ],
+        FadeSlideIn(
+          child: AppCard(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 26),
+            child: Column(
+              children: [
+                Container(
+                  width: 64,
+                  height: 64,
+                  decoration: BoxDecoration(shape: BoxShape.circle, color: AppColors.teal.withValues(alpha: 0.12)),
+                  child: const Icon(Icons.route_rounded, size: 30, color: AppColors.teal),
+                ),
+                const SizedBox(height: 12),
+                Text('No location history yet.', style: theme.textTheme.titleSmall),
+                const SizedBox(height: 4),
+                Text(
+                  'Your saved locations will appear here after you get your current location.',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodySmall,
+                ),
+              ],
+            ),
           ),
         ),
-      for (final record in records) _buildHistoryItem(theme, record),
+      for (final (i, record) in records.indexed)
+        FadeSlideIn(
+          index: i.clamp(0, 8),
+          child: _buildHistoryItem(theme, record, first: i == 0, last: i == records.length - 1),
+        ),
     ];
   }
 
-  Widget _buildHistoryItem(ThemeData theme, LocationRecord record) {
+  /// One stop on the history timeline: a rail with a dot on the left, the place on the right.
+  Widget _buildHistoryItem(ThemeData theme, LocationRecord record, {required bool first, required bool last}) {
     final coordinates = '${formatCoordinate(record.latitude)}, ${formatCoordinate(record.longitude)}';
     final when = '${formatCapturedAt(record.capturedAt)} • Accuracy: ${formatAccuracy(record.accuracy)}';
     final place = record.placeName;
-    return Card(
-      key: ValueKey('location-${record.id}'),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(Icons.location_on, color: theme.colorScheme.primary),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(place ?? coordinates, style: theme.textTheme.titleMedium),
-                  if (place != null && record.areaLine != null) Text(record.areaLine!),
-                  if (place == null) Text('Place name unavailable', style: theme.textTheme.bodySmall),
-                  const SizedBox(height: 6),
-                  if (place != null) Text(coordinates, style: theme.textTheme.bodySmall),
-                  Text(when, style: theme.textTheme.bodySmall),
-                ],
+    final railColor = theme.colorScheme.outlineVariant;
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            width: 28,
+            child: Column(
+              children: [
+                Container(width: 2, height: 18, color: first ? Colors.transparent : railColor),
+                Container(
+                  width: first ? 16 : 12,
+                  height: first ? 16 : 12,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: first ? AppGradients.location : null,
+                    color: first ? null : theme.colorScheme.surface,
+                    border: first ? null : Border.all(color: AppColors.teal, width: 2.5),
+                    boxShadow: first ? AppTheme.glow(AppColors.teal, strength: 0.6) : null,
+                  ),
+                ),
+                Expanded(child: Container(width: 2, color: last ? Colors.transparent : railColor)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: AppCard(
+                key: ValueKey('location-${record.id}'),
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(place ?? coordinates, style: theme.textTheme.titleMedium),
+                    if (place != null && record.areaLine != null)
+                      Text(record.areaLine!, style: theme.textTheme.bodyMedium),
+                    if (place == null) Text('Place name unavailable', style: theme.textTheme.bodySmall),
+                    const SizedBox(height: 8),
+                    if (place != null)
+                      Row(
+                        children: [
+                          Icon(Icons.explore_outlined, size: 14, color: theme.colorScheme.onSurfaceVariant),
+                          const SizedBox(width: 6),
+                          Expanded(child: Text(coordinates, style: theme.textTheme.bodySmall)),
+                        ],
+                      ),
+                    Row(
+                      children: [
+                        Icon(Icons.schedule_rounded, size: 14, color: theme.colorScheme.onSurfaceVariant),
+                        const SizedBox(width: 6),
+                        Expanded(child: Text(when, style: theme.textTheme.bodySmall)),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
