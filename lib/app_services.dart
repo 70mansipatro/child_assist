@@ -3,6 +3,7 @@ import 'core/permissions/permission_service.dart';
 import 'features/auth/data/auth_api.dart';
 import 'features/auth/data/token_storage.dart';
 import 'features/auth/services/auth_service.dart';
+import 'features/documents/services/document_service.dart';
 import 'features/location/data/location_api.dart';
 import 'features/location/services/location_history_service.dart';
 import 'features/location/services/location_service.dart';
@@ -24,10 +25,12 @@ class AppServices {
     required this.locationService,
     required this.locationHistoryService,
     required this.photoGalleryService,
+    required this.documentService,
   });
 
   /// Wires the real implementations. Tests can swap the HTTP client, storage, the
-  /// OS permission layer, the location hardware, the geocoder or the photo library.
+  /// OS permission layer, the location hardware, the geocoder, the photo library or the
+  /// device documents.
   factory AppServices.create({
     ApiClient? apiClient,
     TokenStorage? tokenStorage,
@@ -35,6 +38,7 @@ class AppServices {
     LocationProvider? locationProvider,
     PlaceLookup? placeLookup,
     PhotoLibrary? photoLibrary,
+    DocumentPlatform? documentPlatform,
   }) {
     final client = apiClient ?? ApiClient();
     final authService = AuthService(api: AuthApi(client), storage: tokenStorage ?? TokenStorage());
@@ -57,6 +61,7 @@ class AppServices {
           LocationHistoryService(api: LocationApi(client), authService: authService),
       photoGalleryService:
           PhotoGalleryService(permissionService: permissions, library: photoLibrary),
+      documentService: DocumentService(authService: authService, platform: documentPlatform),
     );
   }
 
@@ -68,4 +73,5 @@ class AppServices {
   final LocationService locationService;
   final LocationHistoryService locationHistoryService;
   final PhotoGalleryService photoGalleryService;
+  final DocumentService documentService;
 }

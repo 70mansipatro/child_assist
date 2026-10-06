@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 /// Brand palette. Feature gradients give each area of the app its own colour identity
-/// (Location is teal, Photos is coral, Profile is amber, Permissions is violet).
+/// (Location is teal, Photos is coral, Documents is blue, Profile is amber, Permissions is violet).
 abstract final class AppColors {
   static const primary = Color(0xFF5B4BFF);
   static const primaryDeep = Color(0xFF3B2EC9);
@@ -45,6 +45,11 @@ abstract final class AppGradients {
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
     colors: [Color(0xFFF15BB5), Color(0xFFFF7A59)],
+  );
+  static const documents = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [Color(0xFF38B6FF), Color(0xFF2F5BEA)],
   );
   static const profile = LinearGradient(
     begin: Alignment.topLeft,

@@ -12,6 +12,7 @@ import 'package:child_assist/app_services.dart';
 import 'package:child_assist/core/api/api_client.dart';
 import 'package:child_assist/core/permissions/permission_service.dart';
 import 'package:child_assist/features/auth/data/token_storage.dart';
+import 'package:child_assist/features/documents/services/document_service.dart';
 import 'package:child_assist/features/location/services/location_service.dart';
 import 'package:child_assist/features/photos/services/photo_gallery_service.dart';
 
@@ -93,6 +94,7 @@ class FakeBackend {
     LocationProvider? locationProvider,
     PlaceLookup? placeLookup,
     PhotoLibrary? photoLibrary,
+    DocumentPlatform? documentPlatform,
   }) =>
       AppServices.create(
         apiClient: ApiClient(baseUrl: 'http://test', httpClient: client),
@@ -101,6 +103,7 @@ class FakeBackend {
         locationProvider: locationProvider ?? FakeLocationProvider(),
         placeLookup: placeLookup ?? FakePlaceLookup(),
         photoLibrary: photoLibrary ?? FakePhotoLibrary(),
+        documentPlatform: documentPlatform ?? FakeDocumentPlatform(),
       );
 
   Future<http.Response> _handle(http.Request req) async {
@@ -442,4 +445,142 @@ class FakePhotoLibrary implements PhotoLibrary {
 
   static String _day(DateTime d) =>
       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+}
+
+/// A file on the fake device.
+class FakeDocumentFile {
+  FakeDocumentFile({
+    required this.reference,
+    required this.name,
+    this.mimeType,
+    this.size,
+    this.modifiedAt,
+    this.content = '',
+  });
+
+  final String reference;
+  final String name;
+  final String? mimeType;
+  final int? size;
+  final DateTime? modifiedAt;
+  final String content;
+}
+
+/// Stands in for the system file picker and the documents on the device.
+///
+/// Put files on the device with [addFile], choose what the user will pick next with
+/// [willPick] (nothing set = the user cancels), and delete files with [deleteFile].
+class FakeDocumentPlatform implements DocumentPlatform {
+  final Map<String, FakeDocumentFile> files = {};
+  int _nextFile = 1;
+
+  /// References the user picks the next time the picker opens; null = they cancel.
+  List<String>? _nextPick;
+
+  /// When set, the next pick throws it.
+  Object? pickError;
+
+  /// When set, the next pick waits for this before returning (the picker is "open").
+  Completer<void>? pendingPick;
+
+  /// When > 0, that many of the next info / read / open calls throw.
+  int infoFailures = 0;
+  int readFailures = 0;
+  int openFailures = 0;
+
+  /// Whether a viewer app for the document's type is installed, and whether any app at all
+  /// accepts files.
+  bool hasViewer = true;
+  bool hasAnyApp = true;
+
+  int pickerShown = 0;
+  final List<List<String>> pickedExtensions = [];
+
+  /// Every open, e.g. "content://fake/1 application/pdf" or "content://fake/1 any app".
+  final List<String> opened = [];
+
+  /// Every byte read: "reference maxBytes".
+  final List<String> reads = [];
+  final List<String> released = [];
+
+  FakeDocumentFile addFile(
+    String name, {
+    String? mimeType,
+    int? size,
+    DateTime? modifiedAt,
+    String content = '',
+  }) {
+    final reference = 'content://fake/${_nextFile++}';
+    return files[reference] = FakeDocumentFile(
+      reference: reference,
+      name: name,
+      mimeType: mimeType,
+      size: size,
+      modifiedAt: modifiedAt,
+      content: content,
+    );
+  }
+
+  void willPick(List<FakeDocumentFile> picked) => _nextPick = [for (final f in picked) f.reference];
+
+  void deleteFile(FakeDocumentFile file) => files.remove(file.reference);
+
+  @override
+  Future<List<PickedDocument>> pick(List<String> extensions) async {
+    pickerShown++;
+    pickedExtensions.add(extensions);
+    final wait = pendingPick;
+    pendingPick = null;
+    if (wait != null) await wait.future;
+    final error = pickError;
+    pickError = null;
+    if (error != null) throw error;
+    final picked = _nextPick ?? [];
+    _nextPick = null;
+    return [
+      for (final reference in picked)
+        PickedDocument(reference: reference, name: files[reference]!.name, info: _info(files[reference]!)),
+    ];
+  }
+
+  @override
+  Future<DocumentInfo?> info(String reference) async {
+    if (infoFailures > 0) {
+      infoFailures--;
+      throw Exception('provider crashed');
+    }
+    final file = files[reference];
+    return file == null ? null : _info(file);
+  }
+
+  @override
+  Future<DocumentOpenResult> open(String reference, {required String mimeType, bool anyApp = false}) async {
+    if (openFailures > 0) {
+      openFailures--;
+      throw Exception('activity crashed');
+    }
+    if (!files.containsKey(reference)) return DocumentOpenResult.unavailable;
+    if (!(anyApp ? hasAnyApp : hasViewer)) return DocumentOpenResult.noViewer;
+    opened.add(anyApp ? '$reference any app' : '$reference $mimeType');
+    return DocumentOpenResult.opened;
+  }
+
+  @override
+  Future<Uint8List?> read(String reference, int maxBytes) async {
+    if (readFailures > 0) {
+      readFailures--;
+      throw Exception('read failed');
+    }
+    reads.add('$reference $maxBytes');
+    final file = files[reference];
+    if (file == null) return null;
+    final bytes = utf8.encode(file.content);
+    return Uint8List.fromList(bytes.take(maxBytes).toList());
+  }
+
+  @override
+  Future<void> release(String reference) async => released.add(reference);
+
+  static DocumentInfo _info(FakeDocumentFile f) =>
+      DocumentInfo(name: f.name, mimeType: f.mimeType, size: f.size, modifiedAt: f.modifiedAt);
 }

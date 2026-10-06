@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../app_services.dart';
 import '../../core/widgets/widgets.dart';
+import '../documents/screens/documents_screen.dart';
 import '../location/screens/location_screen.dart';
 import '../permissions/screens/permissions_screen.dart';
 import '../photos/screens/photos_screen.dart';
@@ -80,6 +81,13 @@ class _HomeScreenState extends State<HomeScreen> {
         onTap: () => _open(
           PermissionsScreen(permissionService: services.permissionService, syncService: services.permissionSyncService),
         ),
+      ),
+      _ActionData(
+        icon: Icons.description_rounded,
+        title: 'Documents',
+        subtitle: 'Files from your device',
+        gradient: AppGradients.documents,
+        onTap: () => _open(DocumentsScreen(documentService: services.documentService)),
       ),
     ];
 
@@ -187,7 +195,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
                     child: FadeSlideIn(
-                      index: 6,
+                      index: actions.length + 2,
                       child: AppCard(
                         child: Row(
                           children: [
