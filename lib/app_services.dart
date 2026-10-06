@@ -3,6 +3,9 @@ import 'core/permissions/permission_service.dart';
 import 'features/auth/data/auth_api.dart';
 import 'features/auth/data/token_storage.dart';
 import 'features/auth/services/auth_service.dart';
+import 'features/location/data/location_api.dart';
+import 'features/location/services/location_history_service.dart';
+import 'features/location/services/location_service.dart';
 import 'features/permissions/data/permissions_api.dart';
 import 'features/permissions/services/permission_sync_service.dart';
 import 'features/profile/data/profile_api.dart';
@@ -15,23 +18,35 @@ class AppServices {
     required this.profileService,
     required this.permissionService,
     required this.permissionSyncService,
+    required this.locationService,
+    required this.locationHistoryService,
   });
 
-  /// Wires the real implementations. Tests can swap the HTTP client, storage or the
-  /// OS permission layer.
+  /// Wires the real implementations. Tests can swap the HTTP client, storage, the
+  /// OS permission layer, the location hardware or the geocoder.
   factory AppServices.create({
     ApiClient? apiClient,
     TokenStorage? tokenStorage,
     PermissionService? permissionService,
+    LocationProvider? locationProvider,
+    PlaceLookup? placeLookup,
   }) {
     final client = apiClient ?? ApiClient();
     final authService = AuthService(api: AuthApi(client), storage: tokenStorage ?? TokenStorage());
+    final permissions = permissionService ?? PermissionService();
     return AppServices(
       authService: authService,
       profileService: ProfileService(api: ProfileApi(client), authService: authService),
-      permissionService: permissionService ?? PermissionService(),
+      permissionService: permissions,
       permissionSyncService:
           PermissionSyncService(api: PermissionsApi(client), authService: authService),
+      locationService: LocationService(
+        permissionService: permissions,
+        provider: locationProvider,
+        placeLookup: placeLookup,
+      ),
+      locationHistoryService:
+          LocationHistoryService(api: LocationApi(client), authService: authService),
     );
   }
 
@@ -39,4 +54,6 @@ class AppServices {
   final ProfileService profileService;
   final PermissionService permissionService;
   final PermissionSyncService permissionSyncService;
+  final LocationService locationService;
+  final LocationHistoryService locationHistoryService;
 }

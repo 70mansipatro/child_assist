@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../app_services.dart';
+import '../location/screens/location_screen.dart';
 import '../permissions/screens/permissions_screen.dart';
 import '../profile/screens/profile_screen.dart';
 
@@ -47,19 +48,30 @@ class _HomeScreenState extends State<HomeScreen> {
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 32),
-                FilledButton.tonalIcon(
-                  onPressed: () => _open(ProfileScreen(profileService: services.profileService)),
-                  icon: const Icon(Icons.person_outline),
-                  label: const Text('Profile'),
+                Text('Quick Actions', style: Theme.of(context).textTheme.titleMedium),
+                const SizedBox(height: 8),
+                _QuickAction(
+                  icon: Icons.location_on_outlined,
+                  title: 'Location',
+                  subtitle: 'View current place',
+                  onTap: () => _open(LocationScreen(
+                    locationService: services.locationService,
+                    historyService: services.locationHistoryService,
+                    permissionSyncService: services.permissionSyncService,
+                  )),
                 ),
-                const SizedBox(height: 12),
-                FilledButton.tonalIcon(
-                  onPressed: () => _open(PermissionsScreen(
+                _QuickAction(
+                  icon: Icons.person_outline,
+                  title: 'Profile',
+                  onTap: () => _open(ProfileScreen(profileService: services.profileService)),
+                ),
+                _QuickAction(
+                  icon: Icons.verified_user_outlined,
+                  title: 'Permissions',
+                  onTap: () => _open(PermissionsScreen(
                     permissionService: services.permissionService,
                     syncService: services.permissionSyncService,
                   )),
-                  icon: const Icon(Icons.verified_user_outlined),
-                  label: const Text('Permissions'),
                 ),
                 const SizedBox(height: 32),
                 OutlinedButton.icon(
@@ -71,6 +83,28 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _QuickAction extends StatelessWidget {
+  const _QuickAction({required this.icon, required this.title, this.subtitle, required this.onTap});
+
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: ListTile(
+        leading: Icon(icon, color: Theme.of(context).colorScheme.primary),
+        title: Text(title),
+        subtitle: subtitle == null ? null : Text(subtitle!),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: onTap,
       ),
     );
   }

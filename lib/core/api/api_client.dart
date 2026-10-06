@@ -64,6 +64,10 @@ class ApiClient {
         ));
   }
 
+  Future<Map<String, dynamic>> delete(String path, {String? token}) {
+    return _send(() => _http.delete(_uri(path), headers: _headers(token)));
+  }
+
   Uri _uri(String path) => Uri.parse('$baseUrl$path');
 
   Map<String, String> _headers(String? token) => {

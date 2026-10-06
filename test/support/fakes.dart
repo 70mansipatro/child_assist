@@ -1,4 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
+
+import 'package:geocoding/geocoding.dart' show Placemark;
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -8,10 +11,11 @@ import 'package:child_assist/app_services.dart';
 import 'package:child_assist/core/api/api_client.dart';
 import 'package:child_assist/core/permissions/permission_service.dart';
 import 'package:child_assist/features/auth/data/token_storage.dart';
+import 'package:child_assist/features/location/services/location_service.dart';
 
 const testPassword = 'password123';
 
-/// In-memory backend with the auth, profile and permission endpoints. Like the real
+/// In-memory backend with the auth, profile, permission and location endpoints. Like the real
 /// server, it identifies the user only from the bearer token and keeps data per user.
 class FakeBackend {
   final Map<String, Map<String, dynamic>> users = {
@@ -25,6 +29,17 @@ class FakeBackend {
   /// Every PATCH received, e.g. "PATCH /api/permissions/LOCATION GRANTED (u1)".
   final List<String> patches = [];
 
+  /// userId -> saved locations (JSON as the server returns them), oldest first.
+  final Map<String, List<Map<String, dynamic>>> locations = {};
+  int _nextLocationId = 1;
+
+  /// When set, every /api/location call fails with this status.
+  int? locationFailureStatus;
+
+  static const placeKeys = [
+    'placeName', 'address', 'street', 'locality', 'city', 'state', 'postalCode', 'country', //
+  ];
+
   static const supportedPermissions = [
     'LOCATION', 'MICROPHONE', 'CAMERA', 'PHOTOS', 'NOTIFICATIONS', 'DOCUMENTS', //
   ];
@@ -34,10 +49,17 @@ class FakeBackend {
 
   late final MockClient client = MockClient(_handle);
 
-  AppServices services(PermissionService permissionService) => AppServices.create(
+  AppServices services(
+    PermissionService permissionService, {
+    LocationProvider? locationProvider,
+    PlaceLookup? placeLookup,
+  }) =>
+      AppServices.create(
         apiClient: ApiClient(baseUrl: 'http://test', httpClient: client),
         tokenStorage: TokenStorage(),
         permissionService: permissionService,
+        locationProvider: locationProvider ?? FakeLocationProvider(),
+        placeLookup: placeLookup ?? FakePlaceLookup(),
       );
 
   Future<http.Response> _handle(http.Request req) async {
@@ -95,6 +117,43 @@ class FakeBackend {
       return _json(200, {'permission': permission, 'status': status});
     }
 
+    if (path.startsWith('/api/location')) return _handleLocation(req, userId);
+
+    return _json(404, {'message': 'Not found'});
+  }
+
+  http.Response _handleLocation(http.Request req, String userId) {
+    if (locationFailureStatus != null) {
+      return _json(locationFailureStatus!, {'message': 'Internal server error'});
+    }
+    final mine = locations[userId] ??= [];
+    final path = req.url.path;
+
+    if (path == '/api/location' && req.method == 'POST') {
+      final body = jsonDecode(req.body) as Map<String, dynamic>;
+      final lat = body['latitude'], lng = body['longitude'];
+      if (lat is! num || lat.abs() > 90) return _json(400, {'message': 'Validation failed'});
+      if (lng is! num || lng.abs() > 180) return _json(400, {'message': 'Validation failed'});
+      final record = {
+        'id': 'loc${_nextLocationId++}',
+        'latitude': lat,
+        'longitude': lng,
+        'accuracy': body['accuracy'],
+        for (final key in placeKeys) key: body[key],
+        'capturedAt': body['capturedAt'],
+      };
+      mine.add(record);
+      return _json(201, {'location': record});
+    }
+    if (path == '/api/location/history' && req.method == 'GET') {
+      final limit = int.tryParse(req.url.queryParameters['limit'] ?? '50') ?? 50;
+      return _json(200, {'locations': mine.reversed.take(limit).toList()});
+    }
+    if (path == '/api/location/history' && req.method == 'DELETE') {
+      final deleted = mine.length;
+      mine.clear();
+      return _json(200, {'deleted': deleted});
+    }
     return _json(404, {'message': 'Not found'});
   }
 
@@ -139,5 +198,66 @@ class FakePermissionService extends PermissionService {
   Future<bool> openSettings() async {
     settingsOpened++;
     return true;
+  }
+}
+
+/// Stands in for the GPS hardware.
+class FakeLocationProvider implements LocationProvider {
+  bool serviceEnabled = true;
+
+  /// Returned by the next reads; set [error] to make them throw instead.
+  DeviceLocation position = DeviceLocation(
+    latitude: 20.2961,
+    longitude: 85.8245,
+    accuracy: 12.4,
+    capturedAt: DateTime.now().toUtc(),
+  );
+  Object? error;
+
+  /// When set, the next read waits for this instead of answering immediately.
+  Completer<DeviceLocation>? pending;
+
+  int reads = 0;
+  int settingsOpened = 0;
+
+  @override
+  Future<bool> isServiceEnabled() async => serviceEnabled;
+
+  @override
+  Future<DeviceLocation> currentPosition({required Duration timeLimit}) async {
+    reads++;
+    if (error != null) throw error!;
+    final wait = pending;
+    pending = null;
+    return wait?.future ?? position;
+  }
+
+  @override
+  Future<bool> openLocationSettings() async {
+    settingsOpened++;
+    return true;
+  }
+}
+
+/// Stands in for the device geocoder. Returns [placemark] (null = no match) or throws [error].
+class FakePlaceLookup implements PlaceLookup {
+  Placemark? placemark = const Placemark(
+    name: 'Jayadev Vihar',
+    street: 'Jayadev Vihar',
+    locality: 'Bhubaneswar',
+    subAdministrativeArea: 'Khordha',
+    administrativeArea: 'Odisha',
+    postalCode: '751013',
+    country: 'India',
+    isoCountryCode: 'IN',
+  );
+  Object? error;
+  int lookups = 0;
+
+  @override
+  Future<Placemark?> placemarkAt(double latitude, double longitude) async {
+    lookups++;
+    if (error != null) throw error!;
+    return placemark;
   }
 }

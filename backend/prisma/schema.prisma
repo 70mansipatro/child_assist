@@ -22,6 +22,7 @@ model User {
   updatedAt       DateTime @updatedAt @map("updated_at")
 
   permissions UserPermission[]
+  locations   LocationHistory[]
 
   @@map("users")
 }
@@ -57,4 +58,32 @@ model UserPermission {
 
   @@unique([userId, permission])
   @@map("user_permissions")
+}
+
+// A device location the user explicitly chose to save ("Get Current Location").
+// Never collected in the background. No device identifiers. The place fields come from the
+// device's own reverse geocoder and may all be null.
+model LocationHistory {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  latitude   Decimal  @db.Decimal(10, 7)
+  longitude  Decimal  @db.Decimal(10, 7)
+  // Horizontal accuracy radius in metres, if the device reported one.
+  accuracy   Decimal? @db.Decimal(10, 2)
+  placeName  String?  @map("place_name") @db.VarChar(255)
+  address    String?  @db.VarChar(1000)
+  street     String?  @db.VarChar(255)
+  locality   String?  @db.VarChar(255)
+  city       String?  @db.VarChar(255)
+  state      String?  @db.VarChar(255)
+  postalCode String?  @map("postal_code") @db.VarChar(32)
+  country    String?  @db.VarChar(255)
+  // When the device took the reading (client clock); createdAt is when the server stored it.
+  capturedAt DateTime @map("captured_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, capturedAt])
+  @@map("location_history")
 }
