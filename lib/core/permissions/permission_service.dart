@@ -2,8 +2,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart' as ph;
 
-/// Device permissions the app uses. Each one is requested only when the user
-/// opens the feature that needs it, never at app start.
+/// Device permissions the app uses. Each one is requested only after the user taps a button
+/// (in the first-time walkthrough or a feature/Permissions screen), never silently at app start.
 enum AppPermission {
   location('Location'),
   microphone('Microphone'),

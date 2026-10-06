@@ -7,6 +7,7 @@ import 'features/location/data/location_api.dart';
 import 'features/location/services/location_history_service.dart';
 import 'features/location/services/location_service.dart';
 import 'features/permissions/data/permissions_api.dart';
+import 'features/permissions/services/permission_onboarding_service.dart';
 import 'features/permissions/services/permission_sync_service.dart';
 import 'features/profile/data/profile_api.dart';
 import 'features/profile/services/profile_service.dart';
@@ -18,6 +19,7 @@ class AppServices {
     required this.profileService,
     required this.permissionService,
     required this.permissionSyncService,
+    required this.permissionOnboardingService,
     required this.locationService,
     required this.locationHistoryService,
   });
@@ -34,12 +36,15 @@ class AppServices {
     final client = apiClient ?? ApiClient();
     final authService = AuthService(api: AuthApi(client), storage: tokenStorage ?? TokenStorage());
     final permissions = permissionService ?? PermissionService();
+    final profileService = ProfileService(api: ProfileApi(client), authService: authService);
     return AppServices(
       authService: authService,
-      profileService: ProfileService(api: ProfileApi(client), authService: authService),
+      profileService: profileService,
       permissionService: permissions,
       permissionSyncService:
           PermissionSyncService(api: PermissionsApi(client), authService: authService),
+      permissionOnboardingService:
+          PermissionOnboardingService(profileService: profileService, authService: authService),
       locationService: LocationService(
         permissionService: permissions,
         provider: locationProvider,
@@ -54,6 +59,7 @@ class AppServices {
   final ProfileService profileService;
   final PermissionService permissionService;
   final PermissionSyncService permissionSyncService;
+  final PermissionOnboardingService permissionOnboardingService;
   final LocationService locationService;
   final LocationHistoryService locationHistoryService;
 }

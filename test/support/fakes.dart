@@ -18,10 +18,47 @@ const testPassword = 'password123';
 /// In-memory backend with the auth, profile, permission and location endpoints. Like the real
 /// server, it identifies the user only from the bearer token and keeps data per user.
 class FakeBackend {
+  /// u1 and u2 have already been through the permission walkthrough; accounts created with
+  /// POST /api/auth/register (or [addUser]) have not.
   final Map<String, Map<String, dynamic>> users = {
-    'u1': {'id': 'u1', 'name': 'Mansi', 'email': 'mansi@example.com', 'profileImageUrl': null},
-    'u2': {'id': 'u2', 'name': 'Ravi', 'email': 'ravi@example.com', 'profileImageUrl': null},
+    'u1': {
+      'id': 'u1',
+      'name': 'Mansi',
+      'email': 'mansi@example.com',
+      'profileImageUrl': null,
+      'permissionOnboardingCompleted': true,
+    },
+    'u2': {
+      'id': 'u2',
+      'name': 'Ravi',
+      'email': 'ravi@example.com',
+      'profileImageUrl': null,
+      'permissionOnboardingCompleted': true,
+    },
   };
+  int _nextUserId = 3;
+
+  /// When > 0, that many of the next GET /api/profile calls fail with 503.
+  int profileFailures = 0;
+
+  /// When > 0, that many of the next PATCH /api/permissions/:permission calls fail with 503.
+  int permissionFailures = 0;
+
+  /// When > 0, that many of the next PATCH /api/profile/permission-onboarding calls fail with 503.
+  int onboardingFailures = 0;
+
+  /// Adds an account (as if it existed before onboarding was introduced) and returns its ID.
+  String addUser(String name, String email, {bool onboardingCompleted = false}) {
+    final id = 'u${_nextUserId++}';
+    users[id] = {
+      'id': id,
+      'name': name,
+      'email': email,
+      'profileImageUrl': null,
+      'permissionOnboardingCompleted': onboardingCompleted,
+    };
+    return id;
+  }
 
   /// userId -> permission -> status, as stored by PATCH /api/permissions/:permission.
   final Map<String, Map<String, String>> permissions = {};
@@ -74,6 +111,15 @@ class FakeBackend {
       return _json(200, {'message': 'Login successful', 'user': _authUser(user), 'token': tokenFor(user['id'])});
     }
 
+    if (path == '/api/auth/register') {
+      final body = jsonDecode(req.body) as Map<String, dynamic>;
+      if (users.values.any((u) => u['email'] == body['email'])) {
+        return _json(409, {'message': 'Email already registered'});
+      }
+      final id = addUser(body['name'] as String, body['email'] as String);
+      return _json(201, {'message': 'Registered', 'user': _authUser(users[id]!), 'token': tokenFor(id)});
+    }
+
     final userId = _userFromToken(req.headers['Authorization']);
     if (userId == null) return _json(401, {'message': 'Invalid or expired token'});
     final user = users[userId]!;
@@ -81,7 +127,26 @@ class FakeBackend {
     if (path == '/api/auth/me') return _json(200, {'user': _authUser(user)});
     if (path == '/api/auth/logout') return _json(200, {'message': 'Logout successful'});
 
-    if (path == '/api/profile' && req.method == 'GET') return _json(200, {'user': user});
+    if (path == '/api/profile' && req.method == 'GET') {
+      if (profileFailures > 0) {
+        profileFailures--;
+        return _json(503, {'message': 'Service unavailable'});
+      }
+      return _json(200, {'user': user});
+    }
+    if (path == '/api/profile/permission-onboarding' && req.method == 'PATCH') {
+      if (onboardingFailures > 0) {
+        onboardingFailures--;
+        return _json(503, {'message': 'Service unavailable'});
+      }
+      final body = jsonDecode(req.body);
+      if (body is! Map || body.length != 1 || body['completed'] is! bool) {
+        return _json(400, {'message': 'Validation failed'});
+      }
+      patches.add('PATCH /api/profile/permission-onboarding ${body['completed']} ($userId)');
+      user['permissionOnboardingCompleted'] = body['completed'];
+      return _json(200, {'user': user});
+    }
     if (path == '/api/profile' && req.method == 'PATCH') {
       final body = jsonDecode(req.body) as Map<String, dynamic>;
       final name = (body['name'] as String?)?.trim() ?? '';
@@ -107,6 +172,10 @@ class FakeBackend {
       });
     }
     if (path.startsWith('/api/permissions/') && req.method == 'PATCH') {
+      if (permissionFailures > 0) {
+        permissionFailures--;
+        return _json(503, {'message': 'Service unavailable'});
+      }
       final permission = path.substring('/api/permissions/'.length);
       final status = (jsonDecode(req.body) as Map<String, dynamic>)['status'];
       if (!supportedPermissions.contains(permission) || !supportedStatuses.contains(status)) {
@@ -182,13 +251,20 @@ class FakePermissionService extends PermissionService {
   };
   final Map<AppPermission, PermissionState> onRequest = {};
   final List<AppPermission> dialogsShown = [];
+
+  /// Every status check and request, in order, e.g. "status location", "request camera".
+  final List<String> calls = [];
   int settingsOpened = 0;
 
   @override
-  Future<PermissionState> status(AppPermission permission) async => os[permission]!;
+  Future<PermissionState> status(AppPermission permission) async {
+    calls.add('status ${permission.name}');
+    return os[permission]!;
+  }
 
   @override
   Future<PermissionState> request(AppPermission permission) async {
+    calls.add('request ${permission.name}');
     if (os[permission] != PermissionState.denied) return os[permission]!;
     dialogsShown.add(permission);
     return os[permission] = onRequest[permission] ?? PermissionState.granted;

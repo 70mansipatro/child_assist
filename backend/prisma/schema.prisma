@@ -18,7 +18,10 @@ model User {
   passwordHash    String?  @map("password_hash")
   // Reference to an externally hosted image only; image bytes are never stored in the database.
   profileImageUrl String?  @map("profile_image_url")
-  createdAt       DateTime @default(now()) @map("created_at")
+  // Whether the user has been through the first-time permission walkthrough once. Separate from
+  // the per-permission statuses in user_permissions: a completed user may still have denials.
+  permissionOnboardingCompleted Boolean @default(false) @map("permission_onboarding_completed")
+  createdAt      DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
   permissions UserPermission[]

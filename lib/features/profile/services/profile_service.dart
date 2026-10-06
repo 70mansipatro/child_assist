@@ -20,4 +20,8 @@ class ProfileService {
     _auth.updateCurrentUser(profile.toUser());
     return profile;
   }
+
+  /// Records on the backend whether the first-time permission walkthrough is finished.
+  Future<Profile> setPermissionOnboardingCompleted(bool completed) =>
+      _auth.authorized((token) => _api.setPermissionOnboarding(token, completed: completed));
 }

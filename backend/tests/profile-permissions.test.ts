@@ -73,7 +73,13 @@ describe("profile", () => {
     const res = await call("GET", "/api/profile", { token: userA.token });
     assert.equal(res.status, 200);
     assert.deepEqual(res.json, {
-      user: { id: userA.id, name: "User A", email: userA.email, profileImageUrl: null },
+      user: {
+        id: userA.id,
+        name: "User A",
+        email: userA.email,
+        profileImageUrl: null,
+        permissionOnboardingCompleted: false,
+      },
     });
     assertNoSecrets(res.raw);
   });

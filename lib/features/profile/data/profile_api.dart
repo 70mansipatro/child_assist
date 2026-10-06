@@ -17,4 +17,13 @@ class ProfileApi {
     final json = await _client.patch('/api/profile', token: token, body: {'name': name});
     return Profile.fromJson(json['user'] as Map<String, dynamic>);
   }
+
+  Future<Profile> setPermissionOnboarding(String token, {required bool completed}) async {
+    final json = await _client.patch(
+      '/api/profile/permission-onboarding',
+      token: token,
+      body: {'completed': completed},
+    );
+    return Profile.fromJson(json['user'] as Map<String, dynamic>);
+  }
 }

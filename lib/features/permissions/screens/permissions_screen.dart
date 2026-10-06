@@ -188,9 +188,8 @@ class _PermissionsScreenState extends State<PermissionsScreen> {
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
                       child: Text(
-                        'Child Assist asks for a permission only when you use a feature that '
-                        'needs it. Your device decides what is allowed; your account keeps a '
-                        'record of the latest status.',
+                        'You can change any of these at any time. Your device decides what is '
+                        'allowed; your account keeps a record of the latest status.',
                         style: theme.textTheme.bodyMedium,
                       ),
                     ),

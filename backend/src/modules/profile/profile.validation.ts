@@ -29,3 +29,13 @@ export const updateProfileSchema = z
   });
 
 export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
+
+// Strict: only "completed" is accepted, so a client can never name another user (e.g. "userId").
+export const permissionOnboardingSchema = z.strictObject(
+  {
+    completed: z.boolean({ error: "completed must be true or false" }),
+  },
+  { error: "Request body must be a JSON object" },
+);
+
+export type PermissionOnboardingInput = z.infer<typeof permissionOnboardingSchema>;

@@ -7,3 +7,4 @@ export const profileRouter = Router();
 profileRouter.use(requireAuth);
 profileRouter.get("/", profileController.getProfile);
 profileRouter.patch("/", profileController.updateProfile);
+profileRouter.patch("/permission-onboarding", profileController.updatePermissionOnboarding);
