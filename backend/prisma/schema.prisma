@@ -1,0 +1,60 @@
+// Prisma schema for Child Assist.
+// Connection URL is configured in prisma.config.ts (reads DATABASE_URL from .env).
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id              String   @id @default(uuid()) @db.Uuid
+  email           String   @unique
+  name            String?
+  passwordHash    String?  @map("password_hash")
+  // Reference to an externally hosted image only; image bytes are never stored in the database.
+  profileImageUrl String?  @map("profile_image_url")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  permissions UserPermission[]
+
+  @@map("users")
+}
+
+enum PermissionType {
+  LOCATION
+  MICROPHONE
+  CAMERA
+  PHOTOS
+  NOTIFICATIONS
+  DOCUMENTS
+}
+
+enum PermissionStatus {
+  UNKNOWN
+  GRANTED
+  DENIED
+  RESTRICTED
+  LIMITED
+}
+
+// The user's last reported device permission status, synced from the app for display/audit.
+// The OS remains the source of truth: this record never grants anything on the device.
+model UserPermission {
+  id         String           @id @default(uuid()) @db.Uuid
+  userId     String           @map("user_id") @db.Uuid
+  permission PermissionType
+  status     PermissionStatus @default(UNKNOWN)
+  createdAt  DateTime         @default(now()) @map("created_at")
+  updatedAt  DateTime         @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, permission])
+  @@map("user_permissions")
+}
