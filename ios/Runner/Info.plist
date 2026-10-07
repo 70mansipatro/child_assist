@@ -29,7 +29,9 @@
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Child Assist uses your location only while you are using a location feature in the app.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Child Assist uses the microphone only when you choose a voice feature.</string>
+	<string>Child Assist uses your microphone only when you tap the voice button, so it can understand what you say.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Child Assist turns what you say into text only after you tap the voice button.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Child Assist accesses your photos only when you choose a feature that uses them.</string>
 	<key>UILaunchStoryboardName</key>

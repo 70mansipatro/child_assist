@@ -3,6 +3,10 @@ import 'core/permissions/permission_service.dart';
 import 'features/auth/data/auth_api.dart';
 import 'features/auth/data/token_storage.dart';
 import 'features/auth/services/auth_service.dart';
+import 'features/chat/data/chat_api.dart';
+import 'features/chat/services/chat_service.dart';
+import 'features/chat/services/text_to_speech_service.dart';
+import 'features/chat/services/voice_input.dart';
 import 'features/documents/services/document_service.dart';
 import 'features/location/data/location_api.dart';
 import 'features/location/services/location_history_service.dart';
@@ -26,11 +30,14 @@ class AppServices {
     required this.locationHistoryService,
     required this.photoGalleryService,
     required this.documentService,
+    required this.chatService,
+    required this.voiceInput,
+    required this.textToSpeech,
   });
 
   /// Wires the real implementations. Tests can swap the HTTP client, storage, the
-  /// OS permission layer, the location hardware, the geocoder, the photo library or the
-  /// device documents.
+  /// OS permission layer, the location hardware, the geocoder, the photo library, the
+  /// device documents, speech recognition or text-to-speech.
   factory AppServices.create({
     ApiClient? apiClient,
     TokenStorage? tokenStorage,
@@ -39,17 +46,19 @@ class AppServices {
     PlaceLookup? placeLookup,
     PhotoLibrary? photoLibrary,
     DocumentPlatform? documentPlatform,
+    VoiceInput? voiceInput,
+    TextToSpeechService? textToSpeech,
   }) {
     final client = apiClient ?? ApiClient();
     final authService = AuthService(api: AuthApi(client), storage: tokenStorage ?? TokenStorage());
     final permissions = permissionService ?? PermissionService();
     final profileService = ProfileService(api: ProfileApi(client), authService: authService);
+    final permissionSyncService = PermissionSyncService(api: PermissionsApi(client), authService: authService);
     return AppServices(
       authService: authService,
       profileService: profileService,
       permissionService: permissions,
-      permissionSyncService:
-          PermissionSyncService(api: PermissionsApi(client), authService: authService),
+      permissionSyncService: permissionSyncService,
       permissionOnboardingService:
           PermissionOnboardingService(profileService: profileService, authService: authService),
       locationService: LocationService(
@@ -62,6 +71,14 @@ class AppServices {
       photoGalleryService:
           PhotoGalleryService(permissionService: permissions, library: photoLibrary),
       documentService: DocumentService(authService: authService, platform: documentPlatform),
+      chatService: ChatService(
+        api: ChatApi(client),
+        authService: authService,
+        permissionService: permissions,
+        permissionSyncService: permissionSyncService,
+      ),
+      voiceInput: voiceInput ?? SpeechToTextVoiceInput(),
+      textToSpeech: textToSpeech ?? FlutterTextToSpeechService(),
     );
   }
 
@@ -74,4 +91,11 @@ class AppServices {
   final LocationHistoryService locationHistoryService;
   final PhotoGalleryService photoGalleryService;
   final DocumentService documentService;
+  final ChatService chatService;
+
+  /// Tap-to-talk speech input for chat.
+  final VoiceInput voiceInput;
+
+  /// Reads chat replies aloud when "Voice replies" is on.
+  final TextToSpeechService textToSpeech;
 }

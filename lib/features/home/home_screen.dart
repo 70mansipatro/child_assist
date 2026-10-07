@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../app_services.dart';
 import '../../core/widgets/widgets.dart';
+import '../chat/screens/chat_screen.dart';
 import '../documents/screens/documents_screen.dart';
 import '../location/screens/location_screen.dart';
 import '../permissions/screens/permissions_screen.dart';
@@ -88,6 +89,23 @@ class _HomeScreenState extends State<HomeScreen> {
         subtitle: 'Files from your device',
         gradient: AppGradients.documents,
         onTap: () => _open(DocumentsScreen(documentService: services.documentService)),
+      ),
+      _ActionData(
+        icon: Icons.smart_toy_rounded,
+        title: 'Child Assist',
+        subtitle: 'Chat with your assistant',
+        gradient: AppGradients.brand,
+        onTap: () => _open(
+          ChatScreen(
+            chatService: services.chatService,
+            documentService: services.documentService,
+            galleryService: services.photoGalleryService,
+            permissionService: services.permissionService,
+            permissionSyncService: services.permissionSyncService,
+            voiceInput: services.voiceInput,
+            textToSpeech: services.textToSpeech,
+          ),
+        ),
       ),
     ];
 

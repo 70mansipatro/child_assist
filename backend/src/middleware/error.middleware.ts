@@ -8,7 +8,7 @@ export function notFoundHandler(_req: Request, res: Response): void {
 
 export function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction): void {
   if (err instanceof HttpError) {
-    res.status(err.status).json({ message: err.message });
+    res.status(err.status).json(err.code ? { message: err.message, code: err.code } : { message: err.message });
     return;
   }
 

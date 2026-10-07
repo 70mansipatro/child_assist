@@ -6,7 +6,7 @@ import 'package:http/http.dart' as http;
 
 /// Thrown for any failed API call. [message] is safe to show to the user.
 class ApiException implements Exception {
-  ApiException(this.message, {this.statusCode, this.fieldErrors = const {}});
+  ApiException(this.message, {this.statusCode, this.fieldErrors = const {}, this.code});
 
   final String message;
 
@@ -15,6 +15,9 @@ class ApiException implements Exception {
 
   /// Validation messages keyed by field name (from HTTP 400 responses).
   final Map<String, String> fieldErrors;
+
+  /// Stable machine-readable reason from the server (e.g. "AI_UNAVAILABLE"), when it sent one.
+  final String? code;
 
   bool get isUnauthorized => statusCode == 401;
 
@@ -48,12 +51,16 @@ class ApiClient {
     return _send(() => _http.get(_uri(path), headers: _headers(token)));
   }
 
-  Future<Map<String, dynamic>> post(String path, {Object? body, String? token}) {
-    return _send(() => _http.post(
-          _uri(path),
-          headers: _headers(token),
-          body: body == null ? null : jsonEncode(body),
-        ));
+  /// [timeout] overrides the default for slow calls (e.g. an AI reply).
+  Future<Map<String, dynamic>> post(String path, {Object? body, String? token, Duration? timeout}) {
+    return _send(
+      () => _http.post(
+        _uri(path),
+        headers: _headers(token),
+        body: body == null ? null : jsonEncode(body),
+      ),
+      timeout: timeout,
+    );
   }
 
   Future<Map<String, dynamic>> patch(String path, {Object? body, String? token}) {
@@ -76,10 +83,10 @@ class ApiClient {
         if (token != null) 'Authorization': 'Bearer $token',
       };
 
-  Future<Map<String, dynamic>> _send(Future<http.Response> Function() request) async {
+  Future<Map<String, dynamic>> _send(Future<http.Response> Function() request, {Duration? timeout}) async {
     final http.Response response;
     try {
-      response = await request().timeout(_timeout);
+      response = await request().timeout(timeout ?? _timeout);
     } on TimeoutException {
       throw ApiException('The server took too long to respond. Please try again.');
     } on http.ClientException {
@@ -103,7 +110,8 @@ class ApiClient {
     final message = json['message'] is String
         ? json['message'] as String
         : 'Something went wrong (${response.statusCode}).';
-    throw ApiException(message, statusCode: response.statusCode, fieldErrors: fieldErrors);
+    final code = json['code'] is String ? json['code'] as String : null;
+    throw ApiException(message, statusCode: response.statusCode, fieldErrors: fieldErrors, code: code);
   }
 
   Map<String, dynamic> _decode(String body) {

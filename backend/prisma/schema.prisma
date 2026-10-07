@@ -24,8 +24,10 @@ model User {
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
-  permissions UserPermission[]
-  locations   LocationHistory[]
+  permissions       UserPermission[]
+  locations         LocationHistory[]
+  chatConversations ChatConversation[]
+  chatToolCalls     ChatToolCall[]
 
   @@map("users")
 }
@@ -89,4 +91,65 @@ model LocationHistory {
 
   @@index([userId, capturedAt])
   @@map("location_history")
+}
+
+// Phase 7: conversations with the "Child Assist" AI assistant. Every row is owned by exactly
+// one user, which callers must take from the verified JWT, never from the request body.
+
+enum ChatMessageRole {
+  CHAT_USER
+  CHAT_ASSISTANT
+  CHAT_SYSTEM
+  CHAT_TOOL
+}
+
+model ChatConversation {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id") @db.Uuid
+  title     String?  @db.VarChar(255)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages  ChatMessage[]
+  toolCalls ChatToolCall[]
+
+  @@index([userId])
+  @@index([updatedAt])
+  @@map("chat_conversations")
+}
+
+model ChatMessage {
+  id             String          @id @default(cuid())
+  conversationId String          @map("conversation_id")
+  role           ChatMessageRole
+  content        String
+  createdAt      DateTime        @default(now()) @map("created_at")
+
+  conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([createdAt])
+  @@map("chat_messages")
+}
+
+// Audit record that the assistant invoked a tool. Deliberately holds no arguments or results:
+// tool payloads may contain locations, contacts, photos, documents or credentials.
+model ChatToolCall {
+  id                   String   @id @default(cuid())
+  conversationId       String   @map("conversation_id")
+  userId               String   @map("user_id") @db.Uuid
+  toolName             String   @map("tool_name") @db.VarChar(100)
+  status               String   @db.VarChar(32)
+  confirmationRequired Boolean  @default(false) @map("confirmation_required")
+  confirmed            Boolean  @default(false)
+  createdAt            DateTime @default(now()) @map("created_at")
+
+  conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("chat_tool_calls")
 }

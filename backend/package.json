@@ -15,8 +15,10 @@
   },
   "license": "UNLICENSED",
   "dependencies": {
+    "@ai-sdk/google-vertex": "5.0.102",
     "@prisma/adapter-pg": "7.10.0",
     "@prisma/client": "7.10.0",
+    "ai": "7.0.128",
     "bcryptjs": "^3.0.3",
     "dotenv": "^18.0.5",
     "express": "^5.2.1",

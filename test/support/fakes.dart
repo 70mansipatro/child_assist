@@ -12,6 +12,8 @@ import 'package:child_assist/app_services.dart';
 import 'package:child_assist/core/api/api_client.dart';
 import 'package:child_assist/core/permissions/permission_service.dart';
 import 'package:child_assist/features/auth/data/token_storage.dart';
+import 'package:child_assist/features/chat/services/text_to_speech_service.dart';
+import 'package:child_assist/features/chat/services/voice_input.dart';
 import 'package:child_assist/features/documents/services/document_service.dart';
 import 'package:child_assist/features/location/services/location_service.dart';
 import 'package:child_assist/features/photos/services/photo_gallery_service.dart';
@@ -76,6 +78,27 @@ class FakeBackend {
   /// When set, every /api/location call fails with this status.
   int? locationFailureStatus;
 
+  /// userId -> conversations (JSON as the server returns them, plus their 'messages').
+  final Map<String, List<Map<String, dynamic>>> chats = {};
+
+  /// Every POST /api/chat body received.
+  final List<Map<String, dynamic>> chatRequests = [];
+
+  /// Status codes for the next POST /api/chat calls to fail with, in order.
+  final List<int> chatFailures = [];
+
+  /// When set, the next POST /api/chat waits for this (Child Assist is "thinking").
+  Completer<void>? chatPending;
+
+  /// Decides the assistant's reply. Defaults to the fixed name answer or an echo.
+  FakeChatReply Function(String message)? chatResponder;
+
+  /// Every action call, e.g. "confirm act1" or "cancel act1".
+  final List<String> chatActions = [];
+
+  int _nextChatId = 1;
+  DateTime _chatClock = DateTime.utc(2026, 10, 6, 9);
+
   static const placeKeys = [
     'placeName', 'address', 'street', 'locality', 'city', 'state', 'postalCode', 'country', //
   ];
@@ -95,6 +118,8 @@ class FakeBackend {
     PlaceLookup? placeLookup,
     PhotoLibrary? photoLibrary,
     DocumentPlatform? documentPlatform,
+    VoiceInput? voiceInput,
+    TextToSpeechService? textToSpeech,
   }) =>
       AppServices.create(
         apiClient: ApiClient(baseUrl: 'http://test', httpClient: client),
@@ -104,6 +129,8 @@ class FakeBackend {
         placeLookup: placeLookup ?? FakePlaceLookup(),
         photoLibrary: photoLibrary ?? FakePhotoLibrary(),
         documentPlatform: documentPlatform ?? FakeDocumentPlatform(),
+        voiceInput: voiceInput ?? FakeVoiceInput(),
+        textToSpeech: textToSpeech ?? FakeTextToSpeech(),
       );
 
   Future<http.Response> _handle(http.Request req) async {
@@ -194,6 +221,7 @@ class FakeBackend {
     }
 
     if (path.startsWith('/api/location')) return _handleLocation(req, userId);
+    if (path.startsWith('/api/chat')) return _handleChat(req, userId);
 
     return _json(404, {'message': 'Not found'});
   }
@@ -229,6 +257,97 @@ class FakeBackend {
       final deleted = mine.length;
       mine.clear();
       return _json(200, {'deleted': deleted});
+    }
+    return _json(404, {'message': 'Not found'});
+  }
+
+  String _tick() => (_chatClock = _chatClock.add(const Duration(minutes: 1))).toIso8601String();
+
+  Map<String, dynamic> _newConversation(String userId, String? title) {
+    final now = _tick();
+    final conversation = <String, dynamic>{
+      'id': 'conv${_nextChatId++}',
+      'title': title,
+      'createdAt': now,
+      'updatedAt': now,
+      'messages': <Map<String, dynamic>>[],
+    };
+    (chats[userId] ??= []).add(conversation);
+    return conversation;
+  }
+
+  static Map<String, dynamic> _publicConversation(Map<String, dynamic> c) =>
+      {for (final e in c.entries) if (e.key != 'messages') e.key: e.value};
+
+  Future<http.Response> _handleChat(http.Request req, String userId) async {
+    final path = req.url.path;
+    final mine = chats[userId] ??= [];
+    Map<String, dynamic>? find(String id) => mine.where((c) => c['id'] == id).firstOrNull;
+
+    if (path == '/api/chat' && req.method == 'POST') {
+      final body = jsonDecode(req.body) as Map<String, dynamic>;
+      chatRequests.add(body);
+      final wait = chatPending;
+      chatPending = null;
+      if (wait != null) await wait.future;
+      if (body.containsKey('userId')) return _json(400, {'message': 'Validation failed'});
+      if (chatFailures.isNotEmpty) {
+        final status = chatFailures.removeAt(0);
+        return _json(status, {'message': 'Child Assist is unavailable right now.', 'code': 'AI_UNAVAILABLE'});
+      }
+      final message = (body['message'] as String).trim();
+      final conversationId = body['conversationId'] as String?;
+      final conversation = conversationId == null ? _newConversation(userId, null) : find(conversationId);
+      if (conversation == null) return _json(404, {'message': 'Conversation not found'});
+
+      final reply = (chatResponder ?? FakeChatReply.standard)(message);
+      final messages = conversation['messages'] as List<Map<String, dynamic>>;
+      final userMessage = {'id': 'm${_nextChatId++}', 'role': 'CHAT_USER', 'content': message, 'createdAt': _tick()};
+      final assistant = {'id': 'm${_nextChatId++}', 'role': 'CHAT_ASSISTANT', 'content': reply.text, 'createdAt': _tick()};
+      messages.addAll([userMessage, assistant]);
+      conversation['title'] ??= reply.title ?? message.split(' ').take(4).join(' ');
+      conversation['updatedAt'] = assistant['createdAt'];
+      return _json(200, {
+        'conversationId': conversation['id'],
+        'title': conversation['title'],
+        'response': reply.text,
+        'userMessage': userMessage,
+        'message': assistant,
+        'pendingActions': reply.pendingActions,
+        'toolsUsed': const [],
+        'toolEvents': reply.toolEvents,
+        'guardrail': null,
+      });
+    }
+    if (path == '/api/chat/conversations' && req.method == 'POST') {
+      return _json(201, {'conversation': _publicConversation(_newConversation(userId, null))});
+    }
+    if (path == '/api/chat/conversations' && req.method == 'GET') {
+      final sorted = [...mine]..sort((a, b) => (b['updatedAt'] as String).compareTo(a['updatedAt'] as String));
+      return _json(200, {'conversations': [for (final c in sorted) _publicConversation(c)]});
+    }
+    if (path.startsWith('/api/chat/conversations/')) {
+      final conversation = find(path.substring('/api/chat/conversations/'.length));
+      if (conversation == null) return _json(404, {'message': 'Conversation not found'});
+      if (req.method == 'GET') {
+        return _json(200, {'conversation': _publicConversation(conversation), 'messages': conversation['messages']});
+      }
+      if (req.method == 'DELETE') {
+        mine.remove(conversation);
+        return _json(200, {'success': true});
+      }
+    }
+    final action = RegExp(r'^/api/chat/actions/([^/]+)/(confirm|cancel)$').firstMatch(path);
+    if (action != null && req.method == 'POST') {
+      final verb = action.group(2)!;
+      chatActions.add('$verb ${action.group(1)}');
+      return _json(200, {
+        'action': {
+          'id': action.group(1),
+          'status': verb == 'confirm' ? 'SUCCEEDED' : 'CANCELLED',
+          'message': verb == 'confirm' ? 'Done! I sent it to Mansi.' : "Okay, I didn't send anything.",
+        },
+      });
     }
     return _json(404, {'message': 'Not found'});
   }
@@ -583,4 +702,153 @@ class FakeDocumentPlatform implements DocumentPlatform {
 
   static DocumentInfo _info(FakeDocumentFile f) =>
       DocumentInfo(name: f.name, mimeType: f.mimeType, size: f.size, modifiedAt: f.modifiedAt);
+}
+
+/// A scripted reply from the fake Child Assist.
+class FakeChatReply {
+  const FakeChatReply(this.text, {this.toolEvents = const [], this.pendingActions = const [], this.title});
+
+  final String text;
+  final List<Map<String, dynamic>> toolEvents;
+  final List<Map<String, dynamic>> pendingActions;
+  final String? title;
+
+  static FakeChatReply standard(String message) => message.toLowerCase().contains('your name')
+      ? const FakeChatReply('My name is Child Assist.')
+      : FakeChatReply('You said: $message');
+}
+
+/// Stands in for the device speech recogniser. A test drives one utterance with [hear],
+/// [finish], [fail] or [silence]; nothing touches a real microphone.
+class FakeVoiceInput implements VoiceInput {
+  FakeVoiceInput({this.available = true, this.initializes = true});
+
+  bool available;
+  bool initializes;
+
+  /// Every call, in order, e.g. "initialize", "listen", "stop", "cancel".
+  final List<String> calls = [];
+  Completer<String?>? _pending;
+  ValueChanged<String>? _onPartial;
+  String _heard = '';
+
+  @override
+  bool get isAvailable => available;
+
+  @override
+  bool get isListening => _pending != null;
+
+  @override
+  Future<bool> initialize() async {
+    calls.add('initialize');
+    return available && initializes;
+  }
+
+  @override
+  Future<String?> listen({ValueChanged<String>? onPartialResult, String? localeId}) {
+    calls.add('listen');
+    if (!available || !initializes) return Future.error(const VoiceInputException(VoiceErrorKind.unavailable));
+    _heard = '';
+    _onPartial = onPartialResult;
+    return (_pending = Completer<String?>()).future;
+  }
+
+  /// The user is speaking: a partial result.
+  void hear(String words) {
+    _heard = words;
+    _onPartial?.call(words);
+  }
+
+  /// The recogniser's final result.
+  void finish(String words) => _complete(words);
+
+  /// The user said nothing.
+  void silence() => _complete('');
+
+  void fail(VoiceErrorKind kind) {
+    final pending = _pending;
+    _pending = null;
+    pending?.completeError(VoiceInputException(kind));
+  }
+
+  @override
+  Future<void> stopListening() async {
+    calls.add('stop');
+    _complete(_heard);
+  }
+
+  @override
+  Future<void> cancelListening() async {
+    if (_pending == null) return;
+    calls.add('cancel');
+    final pending = _pending;
+    _pending = null;
+    pending?.complete(null);
+  }
+
+  void _complete(String words) {
+    final pending = _pending;
+    _pending = null;
+    pending?.complete(words.trim());
+  }
+
+  @override
+  Future<List<VoiceLocale>> locales() async => const [VoiceLocale('en_US', 'English (United States)')];
+
+  @override
+  Future<void> dispose() => cancelListening();
+}
+
+/// Stands in for the device text-to-speech engine. Speech "plays" until [finishSpeaking] or stop.
+class FakeTextToSpeech extends TextToSpeechService {
+  FakeTextToSpeech({this.available = true});
+
+  bool available;
+  final List<String> spoken = [];
+  int stops = 0;
+  bool _enabled = false;
+  bool _speaking = false;
+
+  @override
+  bool get isAvailable => available;
+
+  @override
+  bool get repliesEnabled => _enabled;
+
+  @override
+  set repliesEnabled(bool value) {
+    _enabled = value;
+    notifyListeners();
+  }
+
+  @override
+  bool get isSpeaking => _speaking;
+
+  @override
+  Future<void> speak(String text) async {
+    final speakable = speakableText(text);
+    if (speakable.isEmpty) return;
+    spoken.add(speakable);
+    _speaking = true;
+    notifyListeners();
+  }
+
+  void finishSpeaking() {
+    _speaking = false;
+    notifyListeners();
+  }
+
+  @override
+  Future<void> stop() async {
+    stops++;
+    if (!_speaking) return;
+    _speaking = false;
+    notifyListeners();
+  }
+
+  @override
+  Future<void> pause() async => stop();
+
+  @override
+  Future<void> resume() async {}
 }

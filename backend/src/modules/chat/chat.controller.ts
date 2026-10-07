@@ -1,0 +1,65 @@
+import type { Request, Response } from "express";
+import { getAuth } from "../../middleware/auth.middleware";
+import { cancelPendingAction, confirmPendingAction } from "./actions/pending-actions";
+import { handleChatTurn } from "./chat.orchestrator";
+import * as chatService from "./chat.service";
+import {
+  chatRequestSchema,
+  createConversationSchema,
+  idParamsSchema,
+  listConversationsQuerySchema,
+  updateConversationSchema,
+} from "./chat.validation";
+
+// The user is always the one identified by the verified JWT, never an ID from the request.
+
+export async function chat(req: Request, res: Response): Promise<void> {
+  const input = chatRequestSchema.parse(req.body);
+  const result = await handleChatTurn(getAuth(req).userId, input);
+  res.status(200).json(result);
+}
+
+export async function createConversation(req: Request, res: Response): Promise<void> {
+  const input = createConversationSchema.parse(req.body ?? {});
+  const conversation = await chatService.createConversation(getAuth(req).userId, input);
+  res.status(201).json({ conversation });
+}
+
+export async function listConversations(req: Request, res: Response): Promise<void> {
+  const { limit } = listConversationsQuerySchema.parse(req.query);
+  const conversations = await chatService.listConversations(getAuth(req).userId, { limit });
+  res.status(200).json({ conversations });
+}
+
+export async function getConversation(req: Request, res: Response): Promise<void> {
+  const { id } = idParamsSchema.parse(req.params);
+  const userId = getAuth(req).userId;
+  const conversation = await chatService.getConversation(userId, id);
+  const messages = await chatService.listMessages(userId, id);
+  res.status(200).json({ conversation, messages });
+}
+
+export async function updateConversation(req: Request, res: Response): Promise<void> {
+  const { id } = idParamsSchema.parse(req.params);
+  const { title } = updateConversationSchema.parse(req.body);
+  const conversation = await chatService.renameConversation(getAuth(req).userId, id, title);
+  res.status(200).json({ conversation });
+}
+
+export async function deleteConversation(req: Request, res: Response): Promise<void> {
+  const { id } = idParamsSchema.parse(req.params);
+  await chatService.deleteConversation(getAuth(req).userId, id);
+  res.status(200).json({ success: true });
+}
+
+export async function confirmAction(req: Request, res: Response): Promise<void> {
+  const { id } = idParamsSchema.parse(req.params);
+  const action = await confirmPendingAction(getAuth(req).userId, id);
+  res.status(200).json({ action });
+}
+
+export async function cancelAction(req: Request, res: Response): Promise<void> {
+  const { id } = idParamsSchema.parse(req.params);
+  const action = await cancelPendingAction(getAuth(req).userId, id);
+  res.status(200).json({ action });
+}
