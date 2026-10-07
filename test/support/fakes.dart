@@ -13,6 +13,7 @@ import 'package:child_assist/app_services.dart';
 import 'package:child_assist/core/api/api_client.dart';
 import 'package:child_assist/core/permissions/permission_service.dart';
 import 'package:child_assist/features/auth/data/token_storage.dart';
+import 'package:child_assist/features/auth/services/google_auth_service.dart';
 import 'package:child_assist/features/chat/services/text_to_speech_service.dart';
 import 'package:child_assist/features/chat/services/voice_input.dart';
 import 'package:child_assist/features/documents/services/document_service.dart';
@@ -111,10 +112,31 @@ class FakeBackend {
 
   static String tokenFor(String userId) => 'tok-$userId';
 
+  /// userId -> Google account ID, for accounts that sign in with Google. Like the server, never
+  /// returned in any response.
+  final Map<String, String> googleSubjects = {};
+
+  /// Accounts created with Google have no password, so password login is refused for them.
+  final Set<String> passwordless = {};
+
+  /// Every ID token POST /api/auth/google received.
+  final List<String> googleTokens = [];
+
+  /// The Google identities the fake "verifies": ID token -> claims. Other tokens are rejected.
+  final Map<String, ({String sub, String email, String name})> validGoogleTokens = {};
+
+  /// Registers a Google account and returns the ID token Google would issue for it.
+  String googleAccount({required String sub, required String email, required String name}) {
+    final token = 'google-id-token-$sub';
+    validGoogleTokens[token] = (sub: sub, email: email, name: name);
+    return token;
+  }
+
   late final MockClient client = MockClient(_handle);
 
   AppServices services(
     PermissionService permissionService, {
+    GoogleAuthService? googleAuthService,
     LocationProvider? locationProvider,
     PlaceLookup? placeLookup,
     PhotoLibrary? photoLibrary,
@@ -126,6 +148,7 @@ class FakeBackend {
       AppServices.create(
         apiClient: ApiClient(baseUrl: 'http://test', httpClient: client),
         tokenStorage: TokenStorage(),
+        googleAuthService: googleAuthService ?? FakeGoogleAuthService(),
         permissionService: permissionService,
         locationProvider: locationProvider ?? FakeLocationProvider(),
         placeLookup: placeLookup ?? FakePlaceLookup(),
@@ -142,6 +165,12 @@ class FakeBackend {
     if (path == '/api/auth/login') {
       final body = jsonDecode(req.body) as Map<String, dynamic>;
       final user = users.values.where((u) => u['email'] == body['email']).firstOrNull;
+      if (user != null && passwordless.contains(user['id'])) {
+        return _json(401, {
+          'message': 'This account uses Google Sign-In. Please continue with Google.',
+          'code': 'USE_GOOGLE_SIGN_IN',
+        });
+      }
       if (user == null || body['password'] != testPassword) {
         return _json(401, {'message': 'Invalid email or password'});
       }
@@ -155,6 +184,36 @@ class FakeBackend {
       }
       final id = addUser(body['name'] as String, body['email'] as String);
       return _json(201, {'message': 'Registered', 'user': _authUser(users[id]!), 'token': tokenFor(id)});
+    }
+
+    if (path == '/api/auth/google') {
+      final body = jsonDecode(req.body) as Map<String, dynamic>;
+      // Like the server: only the token is accepted, and identity comes from it alone.
+      if (body.keys.length != 1 || body['idToken'] is! String) {
+        return _json(400, {'message': 'Validation failed'});
+      }
+      final idToken = body['idToken'] as String;
+      googleTokens.add(idToken);
+      final claims = validGoogleTokens[idToken];
+      if (claims == null) {
+        return _json(401, {'message': 'Google authentication failed.', 'code': 'GOOGLE_AUTH_FAILED'});
+      }
+      final linkedId = googleSubjects.entries.where((e) => e.value == claims.sub).firstOrNull?.key;
+      if (linkedId != null) {
+        final user = users[linkedId]!;
+        return _json(200, {'message': 'Login successful', 'user': _authUser(user), 'token': tokenFor(linkedId)});
+      }
+      if (users.values.any((u) => u['email'] == claims.email)) {
+        return _json(409, {
+          'message': 'An account already exists with this email. Please sign in with your password '
+              'first, then use the account-linking option.',
+          'code': 'ACCOUNT_EXISTS_WITH_PASSWORD',
+        });
+      }
+      final id = addUser(claims.name, claims.email);
+      googleSubjects[id] = claims.sub;
+      passwordless.add(id);
+      return _json(200, {'message': 'Login successful', 'user': _authUser(users[id]!), 'token': tokenFor(id)});
     }
 
     final userId = _userFromToken(req.headers['Authorization']);
@@ -368,6 +427,37 @@ class FakeBackend {
 
   static http.Response _json(int status, Object body) => http.Response(jsonEncode(body), status,
       headers: {'content-type': 'application/json'});
+}
+
+/// Stands in for Google's account picker. [nextIdToken] is the ID token of the account the user
+/// picks; [nextError] makes the picker fail instead (e.g. the user cancels).
+class FakeGoogleAuthService implements GoogleAuthService {
+  FakeGoogleAuthService({this.isAvailable = true});
+
+  @override
+  final bool isAvailable;
+
+  String? nextIdToken;
+  GoogleAuthException? nextError;
+  int signInCalls = 0;
+  int signOutCalls = 0;
+
+  /// When set, the picker stays open until this completes.
+  Completer<void>? pending;
+
+  @override
+  Future<String> signIn() async {
+    signInCalls++;
+    await pending?.future;
+    final error = nextError;
+    if (error != null) throw error;
+    final token = nextIdToken;
+    if (token == null) throw GoogleAuthException.notConfigured;
+    return token;
+  }
+
+  @override
+  Future<void> signOut() async => signOutCalls++;
 }
 
 /// Stands in for the OS: [os] is the current state, [onRequest] is what the user picks

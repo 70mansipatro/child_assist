@@ -6,5 +6,6 @@ export const authRouter = Router();
 
 authRouter.post("/register", authController.register);
 authRouter.post("/login", authController.login);
+authRouter.post("/google", authController.google);
 authRouter.get("/me", requireAuth, authController.me);
 authRouter.post("/logout", requireAuth, authController.logout);

@@ -20,8 +20,11 @@ class _LoginScreenState extends State<LoginScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _submitting = false;
+  bool _googleBusy = false;
   bool _obscure = true;
   String? _error;
+
+  bool get _busy => _submitting || _googleBusy;
 
   @override
   void dispose() {
@@ -96,19 +99,26 @@ class _LoginScreenState extends State<LoginScreen> {
                         obscureText: _obscure,
                         autofillHints: const [AutofillHints.password],
                         textInputAction: TextInputAction.done,
-                        onFieldSubmitted: (_) => _submitting ? null : _submit(),
+                        onFieldSubmitted: (_) => _busy ? null : _submit(),
                         validator: (v) =>
                             (v == null || v.isEmpty) ? 'Please enter your password' : null,
                       ),
                       AuthError(message: _error),
                       const SizedBox(height: 18),
                       GradientButton(
-                        onPressed: _submitting ? null : _submit,
+                        onPressed: _busy ? null : _submit,
                         label: _submitting ? const ButtonSpinner() : const Text('Log in'),
                       ),
-                      const SizedBox(height: 2),
+                      ContinueWithGoogle(
+                        authService: widget.authService,
+                        enabled: !_submitting,
+                        onBusyChanged: (busy) {
+                          if (mounted) setState(() => _googleBusy = busy);
+                        },
+                      ),
+                      const SizedBox(height: 6),
                       TextButton(
-                        onPressed: _submitting
+                        onPressed: _busy
                             ? null
                             : () => Navigator.of(context).push(MaterialPageRoute<void>(
                                   builder: (_) => RegisterScreen(authService: widget.authService),

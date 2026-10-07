@@ -22,9 +22,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _submitting = false;
+  bool _googleBusy = false;
   bool _obscure = true;
   String? _error;
   Map<String, String> _fieldErrors = const {};
+
+  bool get _busy => _submitting || _googleBusy;
 
   @override
   void dispose() {
@@ -137,7 +140,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         obscureText: _obscure,
                         autofillHints: const [AutofillHints.newPassword],
                         textInputAction: TextInputAction.done,
-                        onFieldSubmitted: (_) => _submitting ? null : _submit(),
+                        onFieldSubmitted: (_) => _busy ? null : _submit(),
                         validator: (v) => (v == null || v.length < _minPasswordLength)
                             ? 'Password must be at least $_minPasswordLength characters'
                             : null,
@@ -145,8 +148,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       AuthError(message: _fieldErrors.isEmpty ? _error : null),
                       const SizedBox(height: 18),
                       GradientButton(
-                        onPressed: _submitting ? null : _submit,
+                        onPressed: _busy ? null : _submit,
                         label: _submitting ? const ButtonSpinner() : const Text('Register'),
+                      ),
+                      // New Google users get an account; existing ones are signed in.
+                      ContinueWithGoogle(
+                        authService: widget.authService,
+                        enabled: !_submitting,
+                        onBusyChanged: (busy) {
+                          if (mounted) setState(() => _googleBusy = busy);
+                        },
                       ),
                       const SizedBox(height: 12),
                       Row(

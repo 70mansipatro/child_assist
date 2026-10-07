@@ -1,0 +1,3 @@
+{
+  "GOOGLE_SERVER_CLIENT_ID": "<same value as backend GOOGLE_WEB_CLIENT_ID>"
+}

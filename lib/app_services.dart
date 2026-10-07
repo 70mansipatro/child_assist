@@ -6,6 +6,7 @@ import 'core/permissions/permission_service.dart';
 import 'features/auth/data/auth_api.dart';
 import 'features/auth/data/token_storage.dart';
 import 'features/auth/services/auth_service.dart';
+import 'features/auth/services/google_auth_service.dart';
 import 'features/chat/data/chat_api.dart';
 import 'features/chat/services/chat_service.dart';
 import 'features/chat/services/text_to_speech_service.dart';
@@ -40,12 +41,13 @@ class AppServices {
     required this.textToSpeech,
   });
 
-  /// Wires the real implementations. Tests can swap the HTTP client, storage, the
+  /// Wires the real implementations. Tests can swap the HTTP client, storage, Google sign-in, the
   /// OS permission layer, the location hardware, the geocoder, the photo library, the
   /// device documents, speech recognition or text-to-speech.
   factory AppServices.create({
     ApiClient? apiClient,
     TokenStorage? tokenStorage,
+    GoogleAuthService? googleAuthService,
     PermissionService? permissionService,
     LocationProvider? locationProvider,
     PlaceLookup? placeLookup,
@@ -56,7 +58,11 @@ class AppServices {
     ProfilePhotoPlatform? profilePhotoPlatform,
   }) {
     final client = apiClient ?? ApiClient();
-    final authService = AuthService(api: AuthApi(client), storage: tokenStorage ?? TokenStorage());
+    final authService = AuthService(
+      api: AuthApi(client),
+      storage: tokenStorage ?? TokenStorage(),
+      google: googleAuthService,
+    );
     final permissions = permissionService ?? PermissionService();
     final profileService = ProfileService(api: ProfileApi(client), authService: authService);
     final permissionSyncService = PermissionSyncService(api: PermissionsApi(client), authService: authService);

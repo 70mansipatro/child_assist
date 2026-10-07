@@ -41,6 +41,13 @@ class AuthApi {
     return AuthResponse.fromJson(json);
   }
 
+  /// Exchanges a Google ID token for a Child Assist session. Only the token is sent: the server
+  /// takes the name, email and Google account ID from it after verifying it.
+  Future<AuthResponse> google({required String idToken}) async {
+    final json = await _client.post('/api/auth/google', body: {'idToken': idToken});
+    return AuthResponse.fromJson(json);
+  }
+
   Future<User> me(String token) async {
     final json = await _client.get('/api/auth/me', token: token);
     return User.fromJson(json['user'] as Map<String, dynamic>);

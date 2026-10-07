@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 import { getAuth } from "../../middleware/auth.middleware";
 import * as authService from "./auth.service";
-import { loginSchema, registerSchema } from "./auth.validation";
+import { googleLoginSchema, loginSchema, registerSchema } from "./auth.validation";
 
 export async function register(req: Request, res: Response): Promise<void> {
   const input = registerSchema.parse(req.body);
@@ -12,6 +12,12 @@ export async function register(req: Request, res: Response): Promise<void> {
 export async function login(req: Request, res: Response): Promise<void> {
   const input = loginSchema.parse(req.body);
   const { user, token } = await authService.login(input);
+  res.status(200).json({ message: "Login successful", user, token });
+}
+
+export async function google(req: Request, res: Response): Promise<void> {
+  const input = googleLoginSchema.parse(req.body);
+  const { user, token } = await authService.googleLogin(input);
   res.status(200).json({ message: "Login successful", user, token });
 }
 

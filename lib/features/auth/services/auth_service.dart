@@ -4,17 +4,23 @@ import '../../../core/api/api_client.dart';
 import '../data/auth_api.dart';
 import '../data/token_storage.dart';
 import '../models/user.dart';
+import 'google_auth_service.dart';
 
 enum AuthStatus { unknown, authenticated, unauthenticated }
 
 /// Owns the signed-in state. Widgets listen to it to switch between login and home.
 class AuthService extends ChangeNotifier {
-  AuthService({required AuthApi api, required TokenStorage storage})
+  AuthService({required AuthApi api, required TokenStorage storage, GoogleAuthService? google})
       : _api = api,
-        _storage = storage;
+        _storage = storage,
+        _google = google ?? PlatformGoogleAuthService();
 
   final AuthApi _api;
   final TokenStorage _storage;
+  final GoogleAuthService _google;
+
+  /// Whether to offer "Continue with Google" on this platform.
+  bool get googleSignInAvailable => _google.isAvailable;
 
   AuthStatus _status = AuthStatus.unknown;
   User? _user;
@@ -50,6 +56,24 @@ class AuthService extends ChangeNotifier {
 
   Future<void> login({required String email, required String password}) async {
     final result = await _api.login(email: email, password: password);
+    await _storage.write(result.token);
+    _setSignedIn(result.user);
+  }
+
+  /// "Continue with Google": signs in to, or creates, the Child Assist account for the chosen
+  /// Google account. Google only proves who the user is; the session is the backend's own JWT.
+  /// Throws [GoogleAuthException] if no Google account was chosen (nothing changes), or
+  /// [ApiException] if the backend refused (e.g. the email belongs to a password account).
+  Future<void> loginWithGoogle() async {
+    final idToken = await _google.signIn();
+    final AuthResponse result;
+    try {
+      result = await _api.google(idToken: idToken);
+    } catch (_) {
+      // Let the user pick a different Google account on the next try.
+      await _google.signOut();
+      rethrow;
+    }
     await _storage.write(result.token);
     _setSignedIn(result.user);
   }
@@ -99,6 +123,9 @@ class AuthService extends ChangeNotifier {
     } finally {
       await _storage.delete();
       _setSignedOut();
+      // Forget the app's Google sign-in so the account picker shows next time. The Google
+      // account stays on the device. A no-op for password accounts.
+      await _google.signOut();
     }
   }
 

@@ -15,7 +15,11 @@ model User {
   id              String   @id @default(uuid()) @db.Uuid
   email           String   @unique
   name            String?
+  // Null for accounts created with "Continue with Google".
   passwordHash    String?  @map("password_hash")
+  // Google's stable account ID (the verified ID token's `sub`), for accounts that sign in with
+  // Google. Never the email, and no Google tokens are stored.
+  googleSubject   String?  @unique @map("google_subject")
   // Reference to an externally hosted image only; image bytes are never stored in the database.
   profileImageUrl String?  @map("profile_image_url")
   // Whether the user has been through the first-time permission walkthrough once. Separate from

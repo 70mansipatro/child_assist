@@ -45,6 +45,7 @@ dependencies:
   speech_to_text: ^7.4.0
   flutter_tts: ^4.2.5
   path_provider: ^2.1.5
+  google_sign_in: ^7.2.0
 
 dev_dependencies:
   flutter_test:
@@ -69,6 +70,11 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  # Google's official "G" mark, cut unmodified from the sign-in branding kit
+  # (developers.google.com/identity/branding-guidelines). Do not recolour or redraw.
+  assets:
+    - assets/google/
 
   fonts:
     - family: Poppins

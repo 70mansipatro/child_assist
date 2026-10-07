@@ -35,5 +35,17 @@ export const loginSchema = z.object(
   { error: "Request body must be a JSON object" },
 );
 
+// Only the token is accepted: name, email and Google ID come from the verified token, never the body.
+export const googleLoginSchema = z.strictObject(
+  {
+    idToken: z
+      .string({ error: "idToken is required" })
+      .min(1, "idToken is required")
+      .max(4096, "idToken is too long"),
+  },
+  { error: "Request body must be a JSON object" },
+);
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
+export type GoogleLoginInput = z.infer<typeof googleLoginSchema>;

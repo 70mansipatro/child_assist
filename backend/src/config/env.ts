@@ -19,6 +19,15 @@ export const env = {
   jwtExpiresIn: requireEnv("JWT_EXPIRES_IN"),
 } as const;
 
+/**
+ * The Google OAuth *web/server* client ID that Google ID tokens must be issued to (their `aud`).
+ * Read on demand: without it the rest of the API keeps working and POST /api/auth/google answers
+ * 503. This is an ID, not a secret; no OAuth client secret is needed to verify ID tokens.
+ */
+export function googleWebClientId(): string | undefined {
+  return process.env.GOOGLE_WEB_CLIENT_ID?.trim() || undefined;
+}
+
 export interface ChatAiConfig {
   vertexProject: string | undefined;
   vertexLocation: string;
