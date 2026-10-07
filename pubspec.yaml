@@ -44,6 +44,7 @@ dependencies:
   android_file_picker: ^2.0.1
   speech_to_text: ^7.4.0
   flutter_tts: ^4.2.5
+  path_provider: ^2.1.5
 
 dev_dependencies:
   flutter_test:

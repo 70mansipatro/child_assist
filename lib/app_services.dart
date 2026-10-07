@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'core/api/api_client.dart';
+import 'core/navigation/app_menu.dart';
 import 'core/permissions/permission_service.dart';
 import 'features/auth/data/auth_api.dart';
 import 'features/auth/data/token_storage.dart';
@@ -18,6 +19,7 @@ import 'features/permissions/services/permission_onboarding_service.dart';
 import 'features/permissions/services/permission_sync_service.dart';
 import 'features/photos/services/photo_gallery_service.dart';
 import 'features/profile/data/profile_api.dart';
+import 'features/profile/services/profile_photo_service.dart';
 import 'features/profile/services/profile_service.dart';
 
 /// The app's long-lived services, created once at startup and passed down to screens.
@@ -25,6 +27,7 @@ class AppServices {
   AppServices({
     required this.authService,
     required this.profileService,
+    required this.profilePhotoService,
     required this.permissionService,
     required this.permissionSyncService,
     required this.permissionOnboardingService,
@@ -50,6 +53,7 @@ class AppServices {
     DocumentPlatform? documentPlatform,
     VoiceInput? voiceInput,
     TextToSpeechService? textToSpeech,
+    ProfilePhotoPlatform? profilePhotoPlatform,
   }) {
     final client = apiClient ?? ApiClient();
     final authService = AuthService(api: AuthApi(client), storage: tokenStorage ?? TokenStorage());
@@ -59,6 +63,7 @@ class AppServices {
     return AppServices(
       authService: authService,
       profileService: profileService,
+      profilePhotoService: ProfilePhotoService(authService: authService, platform: profilePhotoPlatform),
       permissionService: permissions,
       permissionSyncService: permissionSyncService,
       permissionOnboardingService:
@@ -86,6 +91,9 @@ class AppServices {
 
   final AuthService authService;
   final ProfileService profileService;
+
+  /// The signed-in user's profile photo, kept only on this device.
+  final ProfilePhotoService profilePhotoService;
   final PermissionService permissionService;
   final PermissionSyncService permissionSyncService;
   final PermissionOnboardingService permissionOnboardingService;
@@ -103,4 +111,7 @@ class AppServices {
 
   /// Light, dark or follow the device. Chosen in App Settings; kept for this app session only.
   final ValueNotifier<ThemeMode> themeMode = ValueNotifier(ThemeMode.system);
+
+  /// Lets the ☰ menu on any page ask the signed-in app shell to open another page.
+  final AppMenuController appMenu = AppMenuController();
 }

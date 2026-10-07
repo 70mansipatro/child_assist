@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../core/navigation/app_menu.dart';
 import '../../../core/widgets/widgets.dart';
 import '../services/photo_gallery_service.dart';
 
@@ -43,6 +44,7 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> {
           overflow: TextOverflow.ellipsis,
           style: theme.textTheme.titleMedium?.copyWith(color: Colors.white),
         ),
+        actions: const [AppMenuButton(color: Colors.white)],
       ),
       body: SafeArea(
         child: Column(

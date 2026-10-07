@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:child_assist/app_services.dart';
 import 'package:child_assist/features/chat/screens/chat_screen.dart';
+import 'package:child_assist/features/documents/screens/documents_screen.dart';
 import 'package:child_assist/features/location/screens/location_screen.dart';
 import 'package:child_assist/features/notifications/screens/notifications_screen.dart';
 import 'package:child_assist/features/permissions/screens/permissions_screen.dart';
@@ -44,7 +45,7 @@ void main() {
   testWidgets('Dashboard opens after login with greeting and feature cards', (tester) async {
     await startApp(tester);
     expect(dashboard(), findsOneWidget);
-    expect(find.text('How can I help you today?'), findsOneWidget);
+    expect(find.text('Welcome back! How can I help you today?'), findsOneWidget);
     expect(find.text('View your photos and memories'), findsOneWidget);
     expect(find.text('Find your notes and files'), findsOneWidget);
     expect(find.text('Manage your app permissions'), findsOneWidget);
@@ -67,7 +68,7 @@ void main() {
 
   testWidgets('"Ask Child Assist" on the Dashboard opens the Chat tab', (tester) async {
     await startApp(tester);
-    await tester.tap(find.text('Ask Child Assist'));
+    await tester.tap(find.text('Ask Child Assist anything…'));
     await tester.pumpAndSettle();
     expect(find.byType(ChatScreen), findsOneWidget);
     expect(selectedIndex(tester), 1);
@@ -169,6 +170,54 @@ void main() {
     expect(find.widgetWithText(FilledButton, 'Log in'), findsOneWidget);
     expect(find.byType(AppSettingsScreen), findsNothing);
     expect(find.byType(NavigationBar), findsNothing);
+  });
+
+  Future<void> pickFromMenu(WidgetTester tester, String page) async {
+    await tester.tap(find.byTooltip('Menu'));
+    await tester.pumpAndSettle();
+    final item = find.descendant(of: find.byType(Drawer), matching: find.text(page));
+    await tester.ensureVisible(item);
+    await tester.pumpAndSettle();
+    await tester.tap(item);
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('every page except Dashboard has a menu listing all pages', (tester) async {
+    await startApp(tester);
+    expect(find.byTooltip('Menu'), findsNothing, reason: 'Dashboard has no menu');
+
+    await openTab(tester, 'Location');
+    await tester.tap(find.byTooltip('Menu'));
+    await tester.pumpAndSettle();
+    final menu = find.byType(Drawer);
+    for (final page in [
+      'Dashboard', 'Chat', 'Location', 'Profile', 'Photos',
+      'Documents', 'Permissions', 'Notifications', 'App Settings',
+    ]) {
+      expect(find.descendant(of: menu, matching: find.text(page)), findsOneWidget, reason: page);
+    }
+    await tester.ensureVisible(find.descendant(of: menu, matching: find.text('Documents')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.descendant(of: menu, matching: find.text('Documents')));
+    await tester.pumpAndSettle();
+    expect(find.byType(DocumentsScreen), findsOneWidget);
+  });
+
+  testWidgets('the menu on a pushed page closes it and opens the chosen tab', (tester) async {
+    await startApp(tester);
+    await openFromHome(tester, 'Permissions');
+    expect(find.byType(PermissionsScreen), findsOneWidget);
+
+    await pickFromMenu(tester, 'Chat');
+    expect(find.byType(PermissionsScreen), findsNothing);
+    expect(find.byType(ChatScreen), findsOneWidget);
+    expect(selectedIndex(tester), 1);
+
+    await pickFromMenu(tester, 'App Settings');
+    expect(find.byType(AppSettingsScreen), findsOneWidget);
+    await pickFromMenu(tester, 'Dashboard');
+    expect(find.byType(AppSettingsScreen), findsNothing);
+    expect(dashboard(), findsOneWidget);
   });
 
   testWidgets('the next user starts on the Dashboard tab', (tester) async {

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/navigation/app_menu.dart';
 import '../../../core/widgets/widgets.dart';
 import '../models/chat_conversation.dart';
 import '../services/chat_service.dart';
@@ -85,7 +86,7 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
   Widget build(BuildContext context) {
     final conversations = _conversations;
     return Scaffold(
-      appBar: AppBar(flexibleSpace: const AppBarGradient(), title: const Text('Chat History')),
+      appBar: AppBar(flexibleSpace: const AppBarGradient(), title: const Text('Chat History'), actions: const [AppMenuButton()]),
       body: SafeArea(
         child: switch (conversations) {
           _ when _failed => StateMessage(

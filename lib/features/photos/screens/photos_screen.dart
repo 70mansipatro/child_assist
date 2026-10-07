@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/api/api_client.dart';
 import '../../../core/permissions/permission_service.dart';
+import '../../../core/navigation/app_menu.dart';
 import '../../../core/widgets/widgets.dart';
 import '../../permissions/services/permission_sync_service.dart';
 import '../services/photo_gallery_service.dart';
@@ -239,6 +240,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
             onPressed: _askingOs ? null : () => _checkPermission(),
             icon: const Icon(Icons.refresh_rounded),
           ),
+          const AppMenuButton(current: AppDestination.photos),
           const SizedBox(width: 8),
         ],
       ),

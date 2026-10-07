@@ -239,6 +239,24 @@ describe("isolation", () => {
     assert.equal((await call("GET", `/api/permissions/${userB.id}`, { token: userA.token })).status, 404);
   });
 
+  test("L. A full name is saved, and a userId in the request never changes whose profile it is", async () => {
+    const renamed = await call("PATCH", "/api/profile", { token: userA.token, body: { name: "Mansi Patro" } });
+    assert.equal(renamed.status, 200, renamed.raw);
+    assert.equal(renamed.json.user.name, "Mansi Patro");
+    assert.equal(renamed.json.user.id, userA.id);
+    assertNoSecrets(renamed.raw);
+
+    // Asking for B by query string still returns A: identity comes only from the JWT.
+    const sneaky = await call("GET", `/api/profile?userId=${userB.id}`, { token: userA.token });
+    assert.equal(sneaky.status, 200);
+    assert.equal(sneaky.json.user.id, userA.id);
+    assert.equal(sneaky.json.user.name, "Mansi Patro");
+    assert.equal(sneaky.json.user.email, userA.email);
+
+    const bProfile = await call("GET", "/api/profile", { token: userB.token });
+    assert.equal(bProfile.json.user.name, "Still B");
+  });
+
   test("Deleting a user cascades to their permission rows", async () => {
     const temp = await registerUser("Temp");
     await call("PATCH", "/api/permissions/CAMERA", { token: temp.token, body: { status: "GRANTED" } });

@@ -1,24 +1,49 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/widgets/widgets.dart';
+import '../auth/models/user.dart';
+import '../auth/services/auth_service.dart';
+import '../profile/services/profile_photo_service.dart';
 
 /// The Dashboard tab: a greeting, a shortcut into Chat, and cards for the features that do
 /// not have their own tab (Photos, Documents, Permissions, Notifications).
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({
     super.key,
+    required this.authService,
+    required this.photoService,
+    this.now = DateTime.now,
     required this.onOpenChat,
+    required this.onOpenProfile,
     required this.onOpenPhotos,
     required this.onOpenDocuments,
     required this.onOpenPermissions,
     required this.onOpenNotifications,
   });
 
+  /// The signed-in user; the greeting follows it, including name changes made in Profile.
+  final AuthService authService;
+
+  /// The profile photo shown in the corner avatar.
+  final ProfilePhotoService photoService;
+
+  /// The device's local time, for "Good morning/afternoon/evening". Replaceable in tests.
+  final DateTime Function() now;
+
   final VoidCallback onOpenChat;
+  final VoidCallback onOpenProfile;
   final VoidCallback onOpenPhotos;
   final VoidCallback onOpenDocuments;
   final VoidCallback onOpenPermissions;
   final VoidCallback onOpenNotifications;
+
+  /// 05:00–11:59 morning, 12:00–17:59 afternoon, otherwise evening (device local time).
+  static String timeOfDayGreeting(DateTime time) => switch (time.hour) {
+    >= 5 && < 12 => 'Good morning',
+    >= 12 && < 18 => 'Good afternoon',
+    _ => 'Good evening',
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -59,53 +84,41 @@ class DashboardScreen extends StatelessWidget {
         slivers: [
           SliverToBoxAdapter(
             child: HeroHeader(
-              padding: EdgeInsets.fromLTRB(20, MediaQuery.paddingOf(context).top + 12, 20, 28),
+              padding: EdgeInsets.fromLTRB(20, MediaQuery.paddingOf(context).top + 14, 20, 32),
               child: _Constrained(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                child: ListenableBuilder(
+                  listenable: Listenable.merge([authService, photoService]),
+                  builder: (context, _) {
+                    final user = authService.currentUser;
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const AppLogo(size: 40, onDark: true),
-                        const SizedBox(width: 10),
-                        Semantics(
-                          header: true,
-                          child: Text(
-                            'Child Assist',
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w700,
+                        Row(
+                          children: [
+                            const AppLogo(size: 36, onDark: true),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Semantics(
+                                header: true,
+                                child: Text(
+                                  'Child Assist',
+                                  style: theme.textTheme.titleMedium?.copyWith(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
                             ),
-                          ),
+                            _UserAvatar(user: user, photo: photoService.photo, onPressed: onOpenProfile),
+                          ],
                         ),
+                        const SizedBox(height: 30),
+                        FadeSlideIn(child: _Greeting(greeting: timeOfDayGreeting(now()), user: user)),
+                        const SizedBox(height: 24),
+                        FadeSlideIn(index: 1, child: _AskButton(onPressed: onOpenChat)),
                       ],
-                    ),
-                    const SizedBox(height: 24),
-                    FadeSlideIn(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Text(
-                            "Hi, I'm Child Assist! 👋",
-                            textAlign: TextAlign.center,
-                            style: theme.textTheme.headlineSmall?.copyWith(color: Colors.white, fontSize: 26),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'How can I help you today?',
-                            textAlign: TextAlign.center,
-                            style: theme.textTheme.bodyLarge?.copyWith(
-                              color: Colors.white.withValues(alpha: 0.85),
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    FadeSlideIn(index: 1, child: _AskButton(onPressed: onOpenChat)),
-                  ],
+                    );
+                  },
                 ),
               ),
             ),
@@ -186,6 +199,108 @@ class DashboardScreen extends StatelessWidget {
   }
 }
 
+/// A small "Good afternoon 👋", the user's name large on its own line, then one quiet line
+/// inviting a question. Without a name (not set yet, or still loading) it says "Welcome back".
+class _Greeting extends StatelessWidget {
+  const _Greeting({required this.greeting, required this.user});
+
+  final String greeting;
+  final User? user;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final name = user?.name?.trim();
+    final hasName = name != null && name.isNotEmpty;
+    return MergeSemantics(
+      child: Column(
+        key: const ValueKey('dashboard-greeting'),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '$greeting 👋',
+            style: theme.textTheme.bodyLarge?.copyWith(
+              color: Colors.white.withValues(alpha: 0.82),
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            hasName ? name : 'Welcome back',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.headlineSmall?.copyWith(
+              color: Colors.white,
+              fontSize: 28,
+              fontWeight: FontWeight.w700,
+              height: 1.2,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            hasName ? 'Welcome back! How can I help you today?' : 'How can I help you today?',
+            style: theme.textTheme.bodyMedium?.copyWith(color: Colors.white.withValues(alpha: 0.72)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The user's photo, or their initials in a frosted circle; opens the Profile tab.
+class _UserAvatar extends StatelessWidget {
+  const _UserAvatar({required this.user, required this.photo, required this.onPressed});
+
+  final User? user;
+  final Uint8List? photo;
+  final VoidCallback onPressed;
+
+  static String _initials(String? name) {
+    final words = (name ?? '').trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).take(2);
+    return words.map((w) => w.characters.first.toUpperCase()).join();
+  }
+
+  static Widget _initialsOrIcon(String initials) => Center(
+    child: initials.isEmpty
+        ? const Icon(Icons.person_rounded, color: Colors.white, size: 22)
+        : Text(
+            initials,
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15),
+          ),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final initials = _initials(user?.name);
+    return Tooltip(
+      message: 'Your profile',
+      child: PressableScale(
+        child: Material(
+          color: Colors.white.withValues(alpha: 0.18),
+          shape: CircleBorder(side: BorderSide(color: Colors.white.withValues(alpha: 0.4))),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onPressed,
+            child: SizedBox.square(
+              dimension: 40,
+              child: photo != null
+                  ? Image.memory(
+                      photo!,
+                      key: const ValueKey('dashboard-photo'),
+                      fit: BoxFit.cover,
+                      cacheWidth: 160,
+                      gaplessPlayback: true,
+                      errorBuilder: (_, _, _) => _initialsOrIcon(initials),
+                    )
+                  : _initialsOrIcon(initials),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _Constrained extends StatelessWidget {
   const _Constrained({required this.child});
 
@@ -199,7 +314,7 @@ class _Constrained extends StatelessWidget {
   }
 }
 
-/// A frosted "ask" field on the header that opens the Chat tab.
+/// A white, search-style bar on the header that opens the Chat tab.
 class _AskButton extends StatelessWidget {
   const _AskButton({required this.onPressed});
 
@@ -207,30 +322,48 @@ class _AskButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final radius = BorderRadius.circular(AppSpacing.radius);
     return PressableScale(
-      child: Material(
-        color: Colors.white.withValues(alpha: 0.16),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppSpacing.radius),
-          side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: radius,
+          boxShadow: [
+            BoxShadow(color: AppColors.primaryDeep.withValues(alpha: 0.35), blurRadius: 24, offset: const Offset(0, 10)),
+          ],
         ),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onPressed,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            child: Row(
-              children: [
-                const Icon(Icons.chat_bubble_rounded, size: 20, color: Colors.white),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    'Ask Child Assist',
-                    style: TextStyle(color: Colors.white.withValues(alpha: 0.95), fontWeight: FontWeight.w600),
+        child: Material(
+          color: Colors.white,
+          borderRadius: radius,
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onPressed,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+              child: Row(
+                children: [
+                  const Icon(Icons.auto_awesome_rounded, size: 20, color: AppColors.primary),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      'Ask Child Assist anything…',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: AppTheme.fontFamily,
+                        color: AppColors.inkMuted,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
                   ),
-                ),
-                const Icon(Icons.arrow_forward_rounded, size: 18, color: Colors.white),
-              ],
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(gradient: AppGradients.brand, borderRadius: BorderRadius.circular(12)),
+                    child: const Icon(Icons.arrow_forward_rounded, size: 20, color: Colors.white),
+                  ),
+                ],
+              ),
             ),
           ),
         ),

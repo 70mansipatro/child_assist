@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/api/api_client.dart';
 import '../../../core/permissions/permission_service.dart';
+import '../../../core/navigation/app_menu.dart';
 import '../../../core/widgets/widgets.dart';
 import '../data/permissions_api.dart';
 import '../services/permission_sync_service.dart';
@@ -177,6 +178,7 @@ class _PermissionsScreenState extends State<PermissionsScreen> {
             onPressed: _busy == null ? _refresh : null,
             icon: const Icon(Icons.refresh_rounded),
           ),
+          const AppMenuButton(current: AppDestination.permissions),
           const SizedBox(width: 8),
         ],
       ),

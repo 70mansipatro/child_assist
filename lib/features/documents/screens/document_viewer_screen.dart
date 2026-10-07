@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../../core/navigation/app_menu.dart';
 import '../../../core/widgets/widgets.dart';
 import '../../photos/screens/photo_viewer_screen.dart' show fileSizeLabel;
 import '../services/document_service.dart';
@@ -145,7 +146,9 @@ class _DocumentViewerScreenState extends State<DocumentViewerScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(flexibleSpace: const AppBarGradient(), title: Text(_document.name, overflow: TextOverflow.ellipsis)),
+      appBar: AppBar(flexibleSpace: const AppBarGradient(), title: Text(_document.name, overflow: TextOverflow.ellipsis),
+        actions: const [AppMenuButton()],
+      ),
       body: SafeArea(
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 300),

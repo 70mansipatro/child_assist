@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/permissions/permission_service.dart';
+import '../../../core/navigation/app_menu.dart';
 import '../../../core/widgets/widgets.dart';
 import '../../documents/screens/document_viewer_screen.dart';
 import '../../documents/screens/documents_screen.dart';
@@ -184,8 +185,8 @@ class _ChatScreenState extends State<ChatScreen> {
     return Scaffold(
       appBar: AppBar(
         flexibleSpace: const AppBarGradient(),
+        centerTitle: false,
         title: Row(
-          mainAxisSize: MainAxisSize.min,
           children: [
             // A frosted tile, like the Dashboard logo, so the avatar stands out on the purple bar.
             Semantics(
@@ -202,7 +203,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
             const SizedBox(width: 10),
-            Flexible(
+            Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -231,6 +232,7 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           IconButton(tooltip: 'New Chat', onPressed: _newChat, icon: const Icon(Icons.add_comment_rounded)),
           IconButton(tooltip: 'History', onPressed: _openHistory, icon: const Icon(Icons.history_rounded)),
+          const AppMenuButton(current: AppDestination.chat),
           const SizedBox(width: 4),
         ],
       ),

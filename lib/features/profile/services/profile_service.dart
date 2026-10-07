@@ -13,7 +13,13 @@ class ProfileService {
   final ProfileApi _api;
   final AuthService _auth;
 
-  Future<Profile> load() => _auth.authorized(_api.getProfile);
+  /// GET /api/profile. Also refreshes the signed-in user everyone reads (Dashboard greeting,
+  /// Profile), so the database stays the single source of truth for the name.
+  Future<Profile> load() async {
+    final profile = await _auth.authorized(_api.getProfile);
+    _auth.updateCurrentUser(profile.toUser());
+    return profile;
+  }
 
   Future<Profile> updateName(String name) async {
     final profile = await _auth.authorized((token) => _api.updateProfile(token, name: name.trim()));

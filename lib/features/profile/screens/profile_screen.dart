@@ -1,8 +1,11 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/api/api_client.dart';
+import '../../../core/navigation/app_menu.dart';
 import '../../../core/widgets/widgets.dart';
 import '../models/profile.dart';
+import '../services/profile_photo_service.dart';
 import '../services/profile_service.dart';
 
 /// The Profile tab: the account's name and email, links to Permissions, Notifications and
@@ -11,6 +14,7 @@ class ProfileScreen extends StatefulWidget {
   const ProfileScreen({
     super.key,
     required this.profileService,
+    required this.photoService,
     required this.onOpenPermissions,
     required this.onOpenNotifications,
     required this.onOpenSettings,
@@ -18,6 +22,7 @@ class ProfileScreen extends StatefulWidget {
   });
 
   final ProfileService profileService;
+  final ProfilePhotoService photoService;
   final VoidCallback onOpenPermissions;
   final VoidCallback onOpenNotifications;
   final VoidCallback onOpenSettings;
@@ -68,6 +73,53 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  /// Choose a new photo from the gallery, or remove the current one. Photos stay on this phone.
+  Future<void> _changePhoto() async {
+    final hasPhoto = widget.photoService.photo != null;
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            MenuTile(
+              icon: Icons.photo_library_rounded,
+              gradient: AppGradients.photos,
+              title: hasPhoto ? 'Change photo' : 'Choose photo',
+              subtitle: 'Pick from your gallery. It stays on this phone.',
+              onTap: () => Navigator.of(sheetContext).pop('choose'),
+            ),
+            if (hasPhoto)
+              MenuTile(
+                icon: Icons.delete_outline_rounded,
+                gradient: AppGradients.danger,
+                title: 'Remove photo',
+                onTap: () => Navigator.of(sheetContext).pop('remove'),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || action == null) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      if (action == 'choose') {
+        if (await widget.photoService.choosePhoto()) {
+          messenger.showSnackBar(const SnackBar(content: Text('Photo updated')));
+        }
+      } else {
+        await widget.photoService.removePhoto();
+        messenger.showSnackBar(const SnackBar(content: Text('Photo removed')));
+      }
+    } on ProfilePhotoException catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(content: Text("Couldn't use that photo. Please try another one.")));
+    }
+  }
+
   Future<void> _logout() async {
     setState(() => _loggingOut = true);
     // AuthService clears the token and notifies listeners; the app switches to Login.
@@ -78,7 +130,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget build(BuildContext context) {
     // Once loaded, the title sits inside the gradient header and scrolls away with it.
     return Scaffold(
-      appBar: _profile == null ? AppBar(flexibleSpace: const AppBarGradient(), title: const Text('Profile')) : null,
+      appBar: _profile == null ? AppBar(
+              flexibleSpace: const AppBarGradient(),
+              title: const Text('Profile'),
+              actions: const [AppMenuButton(current: AppDestination.profile)],
+            ) : null,
       body: _buildBody(context),
     );
   }
@@ -118,19 +174,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
             children: [
               SizedBox(
                 height: kToolbarHeight,
-                child: Align(
-                  child: Semantics(
-                    header: true,
-                    child: Text(
-                      'Profile',
-                      style: theme.appBarTheme.titleTextStyle?.copyWith(color: Colors.white) ??
-                          theme.textTheme.titleLarge?.copyWith(color: Colors.white),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    const Align(
+                      alignment: Alignment.centerRight,
+                      child: AppMenuButton(current: AppDestination.profile, color: Colors.white),
                     ),
-                  ),
+                    Semantics(
+                      header: true,
+                      child: Text(
+                        'Profile',
+                        style: theme.appBarTheme.titleTextStyle?.copyWith(color: Colors.white) ??
+                            theme.textTheme.titleLarge?.copyWith(color: Colors.white),
+                      ),
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(height: 8),
-              PopIn(child: _ProfileAvatar(profile: profile, onEdit: _editProfile)),
+              PopIn(
+                child: ListenableBuilder(
+                  listenable: widget.photoService,
+                  builder: (context, _) => _ProfileAvatar(
+                    profile: profile,
+                    photo: widget.photoService.photo,
+                    onChangePhoto: _changePhoto,
+                  ),
+                ),
+              ),
               const SizedBox(height: 14),
               FadeSlideIn(
                 child: Text(
@@ -288,10 +360,13 @@ class _InfoRow extends StatelessWidget {
 /// Shows the profile image if one is set, otherwise (or if it fails to load) a placeholder.
 /// A gradient ring frames it and a small pencil badge opens the editor.
 class _ProfileAvatar extends StatelessWidget {
-  const _ProfileAvatar({required this.profile, required this.onEdit});
+  const _ProfileAvatar({required this.profile, required this.photo, required this.onChangePhoto});
 
   final Profile profile;
-  final VoidCallback onEdit;
+
+  /// The photo chosen on this phone; preferred over [Profile.profileImageUrl].
+  final Uint8List? photo;
+  final VoidCallback onChangePhoto;
 
   @override
   Widget build(BuildContext context) {
@@ -310,8 +385,10 @@ class _ProfileAvatar extends StatelessWidget {
             radius: 50,
             backgroundColor: const Color(0xFFEDEBFF),
             foregroundColor: AppColors.primary,
-            foregroundImage: url != null ? NetworkImage(url) : null,
-            onForegroundImageError: url != null ? (_, _) {} : null,
+            foregroundImage: photo != null
+                ? ResizeImage(MemoryImage(photo!), width: 320)
+                : (url != null ? NetworkImage(url) : null),
+            onForegroundImageError: photo != null || url != null ? (_, _) {} : null,
             child: const Icon(Icons.person, size: 52),
           ),
         ),
@@ -323,10 +400,10 @@ class _ProfileAvatar extends StatelessWidget {
             shape: const CircleBorder(side: BorderSide(color: Colors.white, width: 3)),
             clipBehavior: Clip.antiAlias,
             child: InkWell(
-              onTap: onEdit,
+              onTap: onChangePhoto,
               child: const Padding(
                 padding: EdgeInsets.all(7),
-                child: Icon(Icons.edit_rounded, size: 16, color: Colors.white, semanticLabel: 'Edit name'),
+                child: Icon(Icons.photo_camera_rounded, size: 16, color: Colors.white, semanticLabel: 'Change photo'),
               ),
             ),
           ),

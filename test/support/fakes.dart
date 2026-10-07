@@ -8,6 +8,7 @@ import 'package:flutter/material.dart' show DateTimeRange;
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
+import 'package:child_assist/features/profile/services/profile_photo_service.dart';
 import 'package:child_assist/app_services.dart';
 import 'package:child_assist/core/api/api_client.dart';
 import 'package:child_assist/core/permissions/permission_service.dart';
@@ -120,6 +121,7 @@ class FakeBackend {
     DocumentPlatform? documentPlatform,
     VoiceInput? voiceInput,
     TextToSpeechService? textToSpeech,
+    ProfilePhotoPlatform? profilePhotoPlatform,
   }) =>
       AppServices.create(
         apiClient: ApiClient(baseUrl: 'http://test', httpClient: client),
@@ -131,6 +133,7 @@ class FakeBackend {
         documentPlatform: documentPlatform ?? FakeDocumentPlatform(),
         voiceInput: voiceInput ?? FakeVoiceInput(),
         textToSpeech: textToSpeech ?? FakeTextToSpeech(),
+        profilePhotoPlatform: profilePhotoPlatform ?? FakeProfilePhotoPlatform(),
       );
 
   Future<http.Response> _handle(http.Request req) async {
@@ -851,4 +854,25 @@ class FakeTextToSpeech extends TextToSpeechService {
 
   @override
   Future<void> resume() async {}
+}
+
+/// The phone's photo picker and private storage for profile photos, in memory.
+class FakeProfilePhotoPlatform implements ProfilePhotoPlatform {
+  /// What the next pick returns; null means the user cancels.
+  Uint8List? nextPick;
+
+  /// userId -> saved photo bytes.
+  final Map<String, Uint8List> saved = {};
+
+  @override
+  Future<Uint8List?> pickImage() async => nextPick;
+
+  @override
+  Future<Uint8List?> read(String userId) async => saved[userId];
+
+  @override
+  Future<void> write(String userId, Uint8List bytes) async => saved[userId] = bytes;
+
+  @override
+  Future<void> delete(String userId) async => saved.remove(userId);
 }

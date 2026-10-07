@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../app_services.dart';
+import '../../core/navigation/app_menu.dart';
 import '../../core/widgets/widgets.dart';
 import '../chat/screens/chat_screen.dart';
 import '../documents/screens/documents_screen.dart';
@@ -35,6 +36,44 @@ class _AppShellState extends State<AppShell> {
   // Tabs are built the first time they are shown, then kept alive so a chat in progress or a
   // fetched location survives switching tabs.
   final _visited = <int>{AppShell.dashboardTab};
+
+  @override
+  void initState() {
+    super.initState();
+    widget.services.appMenu.attach(_go);
+  }
+
+  @override
+  void dispose() {
+    widget.services.appMenu.detach(_go);
+    super.dispose();
+  }
+
+  /// Opens a page chosen from the ☰ menu: closes whatever is on top, then shows a tab or
+  /// pushes the page.
+  void _go(AppDestination destination) {
+    Navigator.of(context).popUntil((route) => route.isFirst);
+    switch (destination) {
+      case AppDestination.dashboard:
+        _select(AppShell.dashboardTab);
+      case AppDestination.chat:
+        _select(AppShell.chatTab);
+      case AppDestination.location:
+        _select(AppShell.locationTab);
+      case AppDestination.profile:
+        _select(AppShell.profileTab);
+      case AppDestination.photos:
+        _openPhotos();
+      case AppDestination.documents:
+        _openDocuments();
+      case AppDestination.permissions:
+        _openPermissions();
+      case AppDestination.notifications:
+        _openNotifications();
+      case AppDestination.settings:
+        _openSettings();
+    }
+  }
 
   void _select(int index) {
     if (index == _index) return;
@@ -77,7 +116,10 @@ class _AppShellState extends State<AppShell> {
     final services = widget.services;
     return switch (index) {
       AppShell.dashboardTab => DashboardScreen(
+        authService: services.authService,
+        photoService: services.profilePhotoService,
         onOpenChat: () => _select(AppShell.chatTab),
+        onOpenProfile: () => _select(AppShell.profileTab),
         onOpenPhotos: _openPhotos,
         onOpenDocuments: _openDocuments,
         onOpenPermissions: _openPermissions,
@@ -100,6 +142,7 @@ class _AppShellState extends State<AppShell> {
       ),
       _ => ProfileScreen(
         profileService: services.profileService,
+        photoService: services.profilePhotoService,
         onOpenPermissions: _openPermissions,
         onOpenNotifications: _openNotifications,
         onOpenSettings: _openSettings,

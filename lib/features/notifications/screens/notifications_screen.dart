@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/navigation/app_menu.dart';
 import '../../../core/widgets/widgets.dart';
 
 /// Where Child Assist's notifications will appear. The app does not send notifications yet,
@@ -13,7 +14,9 @@ class NotificationsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(flexibleSpace: const AppBarGradient(), title: const Text('Notifications')),
+      appBar: AppBar(flexibleSpace: const AppBarGradient(), title: const Text('Notifications'),
+        actions: const [AppMenuButton(current: AppDestination.notifications)],
+      ),
       body: SafeArea(
         child: StateMessage(
           icon: Icons.notifications_none_rounded,

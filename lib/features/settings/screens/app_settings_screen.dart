@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/navigation/app_menu.dart';
 import '../../../core/widgets/widgets.dart';
 import '../../chat/services/text_to_speech_service.dart';
 
@@ -64,7 +65,9 @@ class _AppSettingsScreenState extends State<AppSettingsScreen> {
     final tts = widget.textToSpeech;
     final divider = Divider(height: 1, indent: 72, endIndent: 16, color: Theme.of(context).colorScheme.outlineVariant);
     return Scaffold(
-      appBar: AppBar(flexibleSpace: const AppBarGradient(), title: const Text('App Settings')),
+      appBar: AppBar(flexibleSpace: const AppBarGradient(), title: const Text('App Settings'),
+        actions: const [AppMenuButton(current: AppDestination.settings)],
+      ),
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(

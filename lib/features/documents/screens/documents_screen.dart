@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 
+import '../../../core/navigation/app_menu.dart';
 import '../../../core/widgets/widgets.dart';
 import '../services/document_service.dart';
 import '../widgets/document_card.dart';
@@ -184,6 +185,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
             onPressed: _adding || documents == null ? null : _load,
             icon: const Icon(Icons.refresh_rounded),
           ),
+          const AppMenuButton(current: AppDestination.documents),
           const SizedBox(width: 8),
         ],
       ),

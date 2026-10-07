@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'app_services.dart';
+import 'core/navigation/app_menu.dart';
 import 'core/widgets/widgets.dart';
 import 'features/auth/screens/login_screen.dart';
 import 'features/auth/services/auth_service.dart';
@@ -67,6 +68,8 @@ class _MyAppState extends State<MyApp> {
         theme: AppTheme.light,
         darkTheme: AppTheme.dark,
         themeMode: themeMode,
+        // Above the Navigator, so the menu works on pushed pages too.
+        builder: (context, child) => AppMenuScope(controller: widget.services.appMenu, child: child!),
         home: AuthGate(services: widget.services),
       ),
     );

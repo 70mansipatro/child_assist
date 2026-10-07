@@ -12,7 +12,13 @@ Future<void> logIn(WidgetTester tester, String email) async {
 }
 
 /// The Dashboard greeting; present only while the Dashboard tab is showing.
-Finder dashboard() => find.text("Hi, I'm Child Assist! 👋");
+Finder dashboard() => find.byKey(const ValueKey('dashboard-greeting'));
+
+/// The user's name as shown in the Dashboard greeting.
+Finder greetingFor(String name) => find.descendant(of: dashboard(), matching: find.text(name));
+
+/// The Dashboard's small "Good morning/afternoon/evening 👋" line.
+Finder timeOfDayLine() => find.textContaining(RegExp(r'^Good (morning|afternoon|evening) 👋$'));
 
 /// Switches to a bottom-navigation tab: Dashboard, Chat, Location or Profile.
 Future<void> openTab(WidgetTester tester, String label) async {
