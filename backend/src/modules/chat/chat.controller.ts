@@ -4,18 +4,23 @@ import {
   cancelPendingAction,
   completeHandoff,
   confirmPendingAction,
+  setActionDocument,
   setActionRecipient,
   setSharedContact,
 } from "./actions/pending-actions";
 import { handleChatTurn } from "./chat.orchestrator";
+import { answerDocumentRead, failDocumentRead } from "./documents/document-reads";
 import * as chatService from "./chat.service";
 import {
+  actionDocumentSchema,
   actionHandoffSchema,
   actionRecipientSchema,
   actionScopeSchema,
   actionSharedContactSchema,
   chatRequestSchema,
   createConversationSchema,
+  documentReadAnswerSchema,
+  documentReadFailSchema,
   idParamsSchema,
   listConversationsQuerySchema,
   updateConversationSchema,
@@ -74,6 +79,27 @@ export async function chooseSharedContact(req: Request, res: Response): Promise<
   const { conversationId, name, phone } = actionSharedContactSchema.parse(req.body ?? {});
   const action = await setSharedContact(getAuth(req).userId, id, { name, phone }, { conversationId });
   res.status(200).json({ action });
+}
+
+export async function chooseActionDocument(req: Request, res: Response): Promise<void> {
+  const { id } = idParamsSchema.parse(req.params);
+  const { conversationId, documentId, name, type } = actionDocumentSchema.parse(req.body ?? {});
+  const action = await setActionDocument(getAuth(req).userId, id, { documentId, name, type }, { conversationId });
+  res.status(200).json({ action });
+}
+
+export async function answerDocumentReadRequest(req: Request, res: Response): Promise<void> {
+  const { id } = idParamsSchema.parse(req.params);
+  const { conversationId, truncated, ...document } = documentReadAnswerSchema.parse(req.body ?? {});
+  const result = await answerDocumentRead(getAuth(req).userId, id, { ...document, truncated: truncated ?? false }, { conversationId });
+  res.status(200).json(result);
+}
+
+export async function failDocumentReadRequest(req: Request, res: Response): Promise<void> {
+  const { id } = idParamsSchema.parse(req.params);
+  const { conversationId, reason } = documentReadFailSchema.parse(req.body ?? {});
+  const result = await failDocumentRead(getAuth(req).userId, id, reason, { conversationId });
+  res.status(200).json(result);
 }
 
 export async function confirmAction(req: Request, res: Response): Promise<void> {

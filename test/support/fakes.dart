@@ -676,6 +676,17 @@ class FakeBackend {
       final userMessage = {'id': 'm${_nextChatId++}', 'role': 'CHAT_USER', 'content': message, 'createdAt': _tick()};
       final assistant = {'id': 'm${_nextChatId++}', 'role': 'CHAT_ASSISTANT', 'content': reply.text, 'createdAt': _tick()};
       messages.addAll([userMessage, assistant]);
+      // A question about a document opens a read request, as on the real server.
+      for (final event in reply.toolEvents) {
+        final data = event['data'];
+        if (event['kind'] == 'document_text' && data is Map && data['requestId'] is String) {
+          documentReadStore[data['requestId'] as String] = {
+            'userId': userId,
+            'conversationId': conversation['id'],
+            'status': 'PENDING',
+          };
+        }
+      }
       for (final action in reply.pendingActions) {
         chatActionStore[action['id'] as String] = {
           'status': 'PENDING',
@@ -717,11 +728,80 @@ class FakeBackend {
         return _json(200, {'success': true});
       }
     }
-    final action = RegExp(r'^/api/chat/actions/([^/]+)/(recipient|shared-contact|confirm|cancel|handoff)$').firstMatch(path);
+    final read = RegExp(r'^/api/chat/document-reads/([^/]+)/(answer|fail)$').firstMatch(path);
+    if (read != null && req.method == 'POST') {
+      return _handleDocumentRead(read.group(1)!, read.group(2)!, req.body.isEmpty ? {} : jsonDecode(req.body), userId);
+    }
+    final action =
+        RegExp(r'^/api/chat/actions/([^/]+)/(recipient|shared-contact|document|confirm|cancel|handoff)$').firstMatch(path);
     if (action != null && req.method == 'POST') {
       return _handleAction(action.group(1)!, action.group(2)!, req.body.isEmpty ? {} : jsonDecode(req.body), userId);
     }
     return _json(404, {'message': 'Not found'});
+  }
+
+  /// Read requests opened by document questions, by id.
+  final Map<String, Map<String, dynamic>> documentReadStore = {};
+
+  /// Every document-read call, e.g. "answer r1" or "fail r1 unavailable", and its body.
+  final List<String> documentReadCalls = [];
+  final List<Map<String, dynamic>> documentReadBodies = [];
+
+  /// Writes the answer from the text the phone sent, like the model would from the real text.
+  /// The default quotes the document's first line, so tests can tell the answer came from it.
+  String Function(Map<String, dynamic> body) documentAnswerer =
+      (body) => 'This document starts with: ${(body['text'] as String).trim().split('\n').first}';
+
+  /// The document-read endpoints with the real server's rules: owner only, a strict body (an
+  /// opaque id, a name, a type and the text; never a path or URI), answered once.
+  http.Response _handleDocumentRead(String id, String verb, Map<String, dynamic> body, String userId) {
+    documentReadCalls.add(verb == 'fail' ? 'fail $id ${body['reason']}' : 'answer $id');
+    documentReadBodies.add(body);
+    final r = documentReadStore[id];
+    if (r == null || r['userId'] != userId) return _json(404, {'message': 'Request not found'});
+    if (body['conversationId'] != null && body['conversationId'] != r['conversationId']) {
+      return _json(404, {'message': 'Request not found'});
+    }
+    if (r['status'] != 'PENDING') {
+      return _json(409, {'message': 'This request has already been handled.', 'code': 'REQUEST_ALREADY_HANDLED'});
+    }
+    Map<String, dynamic> message(String content) {
+      final m = {'id': 'm${_nextChatId++}', 'role': 'CHAT_ASSISTANT', 'content': content, 'createdAt': _tick()};
+      final conversation = chats[userId]!.firstWhere((c) => c['id'] == r['conversationId']);
+      (conversation['messages'] as List<Map<String, dynamic>>).add(m);
+      return m;
+    }
+
+    if (verb == 'fail') {
+      const messages = {
+        'not_found': "I couldn't find that document on your phone, so I couldn't read it.",
+        'unavailable': 'This document is no longer available, so I couldn\'t read it.',
+        'unsupported': "I can't read the text of this type of document yet. You can still open it from Documents.",
+        'no_text': "I couldn't find any readable text in this document.",
+        'encrypted': 'This document is password-protected, so I couldn\'t read it.',
+        'unreadable': "I couldn't read this document.",
+        'cancelled': "Okay, I didn't read the document.",
+      };
+      final text = messages[body['reason']];
+      if (text == null || body.keys.any((k) => !const {'reason', 'conversationId'}.contains(k))) {
+        return _json(400, {'message': 'Validation failed'});
+      }
+      r['status'] = body['reason'] == 'cancelled' ? 'CANCELLED' : 'FAILED';
+      return _json(200, {'request': {'id': id, 'status': r['status']}, 'message': message(text)});
+    }
+
+    const allowed = {'documentId', 'name', 'type', 'text', 'truncated', 'conversationId'};
+    final text = body['text'];
+    if (body.keys.any((k) => !allowed.contains(k)) ||
+        !RegExp(r'^doc_[a-z0-9]{4,60}$').hasMatch(body['documentId'] as String? ?? '') ||
+        !const {'PDF', 'DOC', 'DOCX', 'TXT'}.contains(body['type']) ||
+        text is! String ||
+        text.trim().isEmpty ||
+        text.length > 150000) {
+      return _json(400, {'message': 'Validation failed'});
+    }
+    r['status'] = 'COMPLETED';
+    return _json(200, {'request': {'id': id, 'status': 'COMPLETED'}, 'message': message(documentAnswerer(body))});
   }
 
   /// The action endpoints with the real server's rules: owner only, set the recipient once,
@@ -747,8 +827,38 @@ class FakeBackend {
       },
     });
     const handled = {'message': 'This action has already been handled', 'code': 'ACTION_ALREADY_HANDLED'};
+    final document = a['type'] == 'SHARE_DOCUMENT';
+    String documentSummary() {
+      final who = a['recipientName'] == null
+          ? (a['contactQuery'] ?? 'this contact')
+          : a['recipientAddress'] == null
+              ? a['recipientName']
+              : '${a['recipientName']} (${a['recipientAddress']})';
+      return 'Do you want to share this document with $who on WhatsApp?';
+    }
 
     switch (verb) {
+      case 'document':
+        // Like the real server: only for SHARE_DOCUMENT, set once, and only an opaque id, a file
+        // name and a type are accepted (never a path or URI).
+        if (!document) return _json(404, {'message': 'Action not found'});
+        if (a['status'] != 'PENDING') return _json(409, handled);
+        if (a['documentId'] != null) {
+          return _json(409, {'message': 'The document has already been chosen.', 'code': 'DOCUMENT_ALREADY_SET'});
+        }
+        final documentId = body['documentId'] as String? ?? '';
+        final documentName = (body['name'] as String? ?? '').trim();
+        if (!RegExp(r'^doc_[a-z0-9]{4,60}$').hasMatch(documentId) ||
+            documentName.isEmpty ||
+            RegExp(r'[/\\<>"\x00-\x1f]').hasMatch(documentName) ||
+            !const {'PDF', 'DOC', 'DOCX', 'TXT'}.contains(body['type'])) {
+          return _json(400, {'message': 'Validation failed'});
+        }
+        a['documentId'] = documentId;
+        a['documentName'] = documentName;
+        a['documentType'] = body['type'];
+        a['dataSummary'] = 'Document: $documentName';
+        return view();
       case 'shared-contact':
         // Like the real server: only for SHARE_CONTACT, set once, and the message is built here
         // from the picked name and number. The recipient is never touched.
@@ -782,6 +892,7 @@ class FakeBackend {
         a['summary'] = switch (a['type']) {
           'SHARE_LOCATION' => 'Share your location with $who $via?',
           'SHARE_TRAVEL_HISTORY' => 'Share your travel history with $who $via?',
+          'SHARE_DOCUMENT' => documentSummary(),
           _ => email ? 'Send an email to $who?' : 'Send this WhatsApp message to $who?',
         };
         return view();
@@ -789,6 +900,9 @@ class FakeBackend {
         if (a['status'] != 'PENDING') return _json(409, handled);
         if (a['type'] == 'SHARE_CONTACT' && a['sharedContactPhone'] == null) {
           return _json(409, {'message': 'Choose whose number to share first.', 'code': 'SHARED_CONTACT_REQUIRED'});
+        }
+        if (document && a['documentId'] == null) {
+          return _json(409, {'message': 'Choose which document to share first.', 'code': 'DOCUMENT_REQUIRED'});
         }
         if (a['recipientAddress'] == null) return _json(409, {'message': 'Choose who to send it to first.'});
         if (email) {
@@ -805,15 +919,21 @@ class FakeBackend {
           'phone': a['recipientAddress'],
           'message': a['message'] ?? '',
           'documentQuery': a['documentQuery'],
+          'documentId': a['documentId'],
         });
       case 'cancel':
         if (a['status'] != 'PENDING' && a['status'] != 'CONFIRMED') return _json(409, handled);
         a['status'] = 'CANCELLED';
-        return view("Okay, I didn't send anything.");
+        return view(document ? "Okay, I didn't share the document." : "Okay, I didn't send anything.");
       case 'handoff':
         if (a['status'] != 'CONFIRMED' || email) return _json(409, handled);
         if (result == 'unavailable') return view("WhatsApp isn't available on this device.");
         a['status'] = 'COMPLETED';
+        if (document) {
+          return view(result == 'whatsapp_opened'
+              ? 'WhatsApp opened. Please tap Send to send the document.'
+              : 'Share options opened. Nothing is sent until you send the document from the app you choose.');
+        }
         return view(result == 'whatsapp_opened'
             ? 'WhatsApp opened for ${a['recipientName']} with your message. Tap Send in WhatsApp to deliver it.'
             : 'Share options opened for ${a['recipientName']}. Nothing is sent until you send it from the app you choose.');
@@ -1148,6 +1268,7 @@ class FakeDocumentFile {
     this.size,
     this.modifiedAt,
     this.content = '',
+    this.encrypted = false,
   });
 
   final String reference;
@@ -1155,7 +1276,25 @@ class FakeDocumentFile {
   final String? mimeType;
   final int? size;
   final DateTime? modifiedAt;
+
+  /// The file's text: what a TXT contains, or what text extraction finds in a PDF or DOCX
+  /// (empty for a scanned PDF).
   final String content;
+
+  /// A password-protected PDF.
+  final bool encrypted;
+}
+
+/// A folder on the fake device.
+class FakeFolder {
+  FakeFolder({required this.reference, required this.name});
+
+  final String reference;
+  final String name;
+  final List<String> files = [];
+
+  /// Whether Child Assist holds read access to it (granted when picked).
+  bool granted = false;
 }
 
 /// Stands in for the system file picker and the documents on the device.
@@ -1188,6 +1327,9 @@ class FakeDocumentPlatform implements DocumentPlatform {
   int pickerShown = 0;
   final List<List<String>> pickedExtensions = [];
 
+  /// For each pick, whether several files could be chosen.
+  final List<bool> pickedMultiple = [];
+
   /// Every open, e.g. "content://fake/1 application/pdf" or "content://fake/1 any app".
   final List<String> opened = [];
 
@@ -1201,6 +1343,7 @@ class FakeDocumentPlatform implements DocumentPlatform {
     int? size,
     DateTime? modifiedAt,
     String content = '',
+    bool encrypted = false,
   }) {
     final reference = 'content://fake/${_nextFile++}';
     return files[reference] = FakeDocumentFile(
@@ -1210,25 +1353,108 @@ class FakeDocumentPlatform implements DocumentPlatform {
       size: size,
       modifiedAt: modifiedAt,
       content: content,
+      encrypted: encrypted,
     );
+  }
+
+  /// Every text extraction: "reference TYPE maxChars". Tests check only the chosen file is read.
+  final List<String> extracted = [];
+
+  @override
+  Future<ExtractedText?> extractText(String reference, DocumentType type, int maxChars) async {
+    extracted.add('$reference ${type.label} $maxChars');
+    final file = files[reference];
+    if (file == null) return null;
+    if (file.encrypted) return const ExtractedText.failed(DocumentTextProblem.encrypted);
+    final text = file.content;
+    return text.length > maxChars
+        ? ExtractedText.ok(text.substring(0, maxChars), truncated: true)
+        : ExtractedText.ok(text);
   }
 
   void willPick(List<FakeDocumentFile> picked) => _nextPick = [for (final f in picked) f.reference];
 
+  // Folders granted in the system folder picker (Android's document tree access).
+
+  @override
+  bool supportsFolders = true;
+
+  /// Folder references (still granted) and the files in each.
+  final Map<String, FakeFolder> folders = {};
+  int _nextFolder = 1;
+  FakeFolder? _nextFolderPick;
+  int folderPickerShown = 0;
+  final List<String> releasedFolders = [];
+
+  /// A folder on the device. Put files in it with [addFileTo].
+  FakeFolder addFolder(String name) {
+    final folder = FakeFolder(reference: 'content://fake-tree/${_nextFolder++}', name: name);
+    return folders[folder.reference] = folder;
+  }
+
+  /// A file inside [folder] (or a subfolder of it), as the folder listing would find it.
+  FakeDocumentFile addFileTo(
+    FakeFolder folder,
+    String name, {
+    String? mimeType,
+    int? size,
+    DateTime? modifiedAt,
+    String content = '',
+  }) {
+    final file = addFile(name, mimeType: mimeType, size: size, modifiedAt: modifiedAt, content: content);
+    folder.files.add(file.reference);
+    return file;
+  }
+
+  /// The folder the user chooses the next time the folder picker opens; none = they cancel.
+  void willPickFolder(FakeFolder folder) => _nextFolderPick = folder;
+
+  /// The user removed the folder's access in Android settings (or deleted the folder).
+  void revokeFolder(FakeFolder folder) => folder.granted = false;
+
+  @override
+  Future<PickedFolder?> pickFolder() async {
+    folderPickerShown++;
+    final folder = _nextFolderPick;
+    _nextFolderPick = null;
+    if (folder == null) return null;
+    folder.granted = true;
+    return PickedFolder(reference: folder.reference, name: folder.name);
+  }
+
+  @override
+  Future<FolderListing?> listFolder(String reference) async {
+    final folder = folders[reference];
+    if (folder == null || !folder.granted) return null;
+    return FolderListing(
+      folderName: folder.name,
+      documents: [
+        for (final ref in folder.files)
+          if (files[ref] != null) PickedDocument(reference: ref, name: files[ref]!.name, info: _info(files[ref]!)),
+      ],
+    );
+  }
+
+  @override
+  Future<void> releaseFolder(String reference) async => releasedFolders.add(reference);
+
   void deleteFile(FakeDocumentFile file) => files.remove(file.reference);
 
   @override
-  Future<List<PickedDocument>> pick(List<String> extensions) async {
+  Future<List<PickedDocument>> pick(List<String> extensions, {bool multiple = true}) async {
     pickerShown++;
     pickedExtensions.add(extensions);
+    pickedMultiple.add(multiple);
     final wait = pendingPick;
     pendingPick = null;
     if (wait != null) await wait.future;
     final error = pickError;
     pickError = null;
     if (error != null) throw error;
-    final picked = _nextPick ?? [];
+    var picked = _nextPick ?? [];
     _nextPick = null;
+    // The single-file picker only lets the user choose one.
+    if (!multiple && picked.length > 1) picked = picked.sublist(0, 1);
     return [
       for (final reference in picked)
         PickedDocument(reference: reference, name: files[reference]!.name, info: _info(files[reference]!)),

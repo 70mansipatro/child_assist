@@ -22,6 +22,9 @@ import { buildContactPhoneShareMessage } from "./share-content";
 //
 //   PENDING ──confirm──▶ CONFIRMED ──▶ COMPLETED | FAILED       (email: sent by the backend)
 //   PENDING ──confirm──▶ CONFIRMED ──handoff──▶ COMPLETED       (WhatsApp: opened on the phone)
+//
+// A SHARE_DOCUMENT action also needs the document the user picked on the phone (set once, like
+// the recipient) before it can be confirmed.
 //   PENDING ──cancel───▶ CANCELLED
 //   PENDING/CONFIRMED ──10 minutes──▶ EXPIRED
 //
@@ -37,6 +40,7 @@ const SCRUBBED = {
   message: null,
   sharedContactName: null,
   sharedContactPhone: null,
+  documentName: null,
 } as const;
 
 export interface ActionDraft {
@@ -86,11 +90,11 @@ export function summaryFor(action: ChatAction): string {
     case ChatActionType.SHARE_TRAVEL_HISTORY:
       return `Share your travel history with ${target} ${via}?`;
     case ChatActionType.SHARE_DOCUMENT:
-      return action.documentQuery
-        ? `Share the document "${action.documentQuery}" with ${target} ${via}?`
-        : `Share a document with ${target} ${via}?`;
+      return `Do you want to share this document with ${target} ${via}?`;
   }
 }
+
+const isDocumentShare = (action: Pick<ChatAction, "type">) => action.type === ChatActionType.SHARE_DOCUMENT;
 
 const TOOL_NAMES: Record<ChatActionChannel, string> = {
   [ChatActionChannel.EMAIL]: "prepare_email",
@@ -113,6 +117,9 @@ export function toView(action: ChatAction): PendingActionView {
     message: action.message,
     dataSummary: action.dataSummary,
     documentQuery: action.documentQuery,
+    documentId: action.documentId,
+    documentName: action.documentName,
+    documentType: action.documentType,
     sharedContactQuery: action.sharedContactQuery,
     sharedContactName: action.sharedContactName,
     sharedContactPhone: action.sharedContactPhone,
@@ -210,6 +217,9 @@ async function rejection(userId: string, id: string, scope: ActionScope, expecte
   if (action.status === expected && action.type === ChatActionType.SHARE_CONTACT && action.sharedContactPhone === null) {
     return new HttpError(409, "Choose whose number to share first.", "SHARED_CONTACT_REQUIRED");
   }
+  if (action.status === expected && isDocumentShare(action) && action.documentId === null) {
+    return new HttpError(409, "Choose which document to share first.", "DOCUMENT_REQUIRED");
+  }
   if (action.status === expected && action.recipientAddress === null) {
     return new HttpError(409, "Choose who to send it to first.", "RECIPIENT_REQUIRED");
   }
@@ -306,11 +316,58 @@ export async function setSharedContact(
   return toView(await load(userId, id, scope));
 }
 
+export type DocumentTypeLabel = "PDF" | "DOC" | "DOCX" | "TXT";
+
+/**
+ * Sets the one document a SHARE_DOCUMENT action shares, after the app searched the user's own
+ * documents on the phone and the user picked one (or the only strong match was taken). Only the
+ * app's opaque id, the file name and the type are sent: never a path, a URI or the contents. It can
+ * be set once, so the user confirms exactly that document, and the phone later shares exactly it.
+ */
+export async function setActionDocument(
+  userId: string,
+  id: string,
+  input: { documentId: string; name: string; type: DocumentTypeLabel },
+  scope: ActionScope = {},
+): Promise<PendingActionView> {
+  const action = await load(userId, id, scope);
+  // Any other action looks like a missing one: a document can never be slipped into an email.
+  if (!isDocumentShare(action)) throw notFound();
+
+  const { count } = await prisma.chatAction.updateMany({
+    where: {
+      id,
+      userId,
+      type: ChatActionType.SHARE_DOCUMENT,
+      status: ChatActionStatus.PENDING,
+      documentId: null,
+      expiresAt: { gt: new Date() },
+    },
+    data: {
+      documentId: input.documentId,
+      documentName: input.name,
+      documentType: input.type,
+      dataSummary: `Document: ${input.name}`,
+    },
+  });
+  if (count === 0) {
+    const current = await load(userId, id, scope);
+    if (current.status === ChatActionStatus.PENDING && current.documentId !== null && current.expiresAt > new Date()) {
+      throw new HttpError(409, "The document has already been chosen.", "DOCUMENT_ALREADY_SET");
+    }
+    throw await rejection(userId, id, scope, ChatActionStatus.PENDING);
+  }
+  return toView(await load(userId, id, scope));
+}
+
 export interface ActionOutcome extends PendingActionView {
   /** What the app shows on the card (also stored as an assistant message when final). */
   outcomeMessage: string;
-  /** WhatsApp only: what the phone must open. The user still sends it in WhatsApp. */
-  handoff?: { phone: string; message: string; documentQuery: string | null };
+  /**
+   * WhatsApp only: what the phone must open. The user still sends it in WhatsApp. For a document
+   * share, [documentId] is the document the user confirmed: the phone shares exactly that one.
+   */
+  handoff?: { phone: string; message: string; documentQuery: string | null; documentId: string | null };
 }
 
 function outcome(action: ChatAction, outcomeMessage: string, extra: Partial<ActionOutcome> = {}): ActionOutcome {
@@ -333,8 +390,12 @@ export async function confirmPendingAction(userId: string, id: string, scope: Ac
       expiresAt: { gt: now },
       recipientAddress: { not: null },
       message: { not: null },
-      // A shared number must have been picked on the phone; the model never supplies it.
-      OR: [{ type: { not: ChatActionType.SHARE_CONTACT } }, { sharedContactPhone: { not: null } }],
+      AND: [
+        // A shared number must have been picked on the phone; the model never supplies it.
+        { OR: [{ type: { not: ChatActionType.SHARE_CONTACT } }, { sharedContactPhone: { not: null } }] },
+        // Likewise the document: the user must have picked it before confirming.
+        { OR: [{ type: { not: ChatActionType.SHARE_DOCUMENT } }, { documentId: { not: null } }] },
+      ],
     },
     // The phone gets a fresh window to open WhatsApp after the user confirmed.
     data: { status: ChatActionStatus.CONFIRMED, confirmedAt: now, expiresAt: new Date(now.getTime() + PENDING_ACTION_TTL_MS) },
@@ -346,7 +407,12 @@ export async function confirmPendingAction(userId: string, id: string, scope: Ac
   if (action.channel === ChatActionChannel.EMAIL) return executeEmailAction(userId, id);
 
   return outcome(action, "Opening WhatsApp...", {
-    handoff: { phone: action.recipientAddress!, message: action.message ?? "", documentQuery: action.documentQuery },
+    handoff: {
+      phone: action.recipientAddress!,
+      message: action.message ?? "",
+      documentQuery: action.documentQuery,
+      documentId: action.documentId,
+    },
   });
 }
 
@@ -433,8 +499,11 @@ export async function completeHandoff(
     notifyInBackground(userId, templates.whatsappOpened(), { dedupeKey: `whatsapp-action:${id}` });
   }
 
-  const message =
-    result === "whatsapp_opened"
+  const message = isDocumentShare(action)
+    ? result === "whatsapp_opened"
+      ? "WhatsApp opened. Please tap Send to send the document."
+      : "Share options opened. Nothing is sent until you send the document from the app you choose."
+    : result === "whatsapp_opened"
       ? `WhatsApp opened for ${name} with your message. Tap Send in WhatsApp to deliver it.`
       : `Share options opened for ${name}. Nothing is sent until you send it from the app you choose.`;
   await note(userId, action.conversationId, message);
@@ -450,7 +519,7 @@ export async function cancelPendingAction(userId: string, id: string, scope: Act
   });
   if (count === 0) throw await rejection(userId, id, scope, action.status);
   await audit(userId, id, auditStatusOf(action.status), "CANCELLED");
-  const message = "Okay, I didn't send anything.";
+  const message = isDocumentShare(action) ? "Okay, I didn't share the document." : "Okay, I didn't send anything.";
   await note(userId, action.conversationId, message);
   return outcome(await load(userId, id, scope), message);
 }

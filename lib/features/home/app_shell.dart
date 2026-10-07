@@ -7,7 +7,7 @@ import '../../core/navigation/app_menu.dart';
 import '../../core/notifications/notification_service.dart';
 import '../../core/widgets/widgets.dart';
 import '../chat/screens/chat_screen.dart';
-import '../documents/screens/documents_screen.dart';
+import '../documents/screens/pick_document.dart';
 import '../location/screens/location_screen.dart';
 import '../notifications/screens/notification_settings_screen.dart';
 import '../notifications/screens/notifications_screen.dart';
@@ -150,7 +150,13 @@ class _AppShellState extends State<AppShell> {
     ),
   );
 
-  void _openDocuments() => _push(DocumentsScreen(documentService: widget.services.documentService));
+  /// Documents opens Android's own document picker straight away; what the user picks opens.
+  void _openDocuments() => pickAndOpenDocument(
+        context,
+        documentService: widget.services.documentService,
+        messageHandoff: widget.services.messageHandoff,
+        push: _push,
+      );
 
   void _openPermissions() => _push(
     PermissionsScreen(

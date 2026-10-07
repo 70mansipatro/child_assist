@@ -60,6 +60,33 @@ class MainActivity : FlutterActivity() {
         // needs no storage permission. Contents are only read on request ("read"), up to a limit.
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "child_assist/documents")
             .setMethodCallHandler { call, result ->
+                // Folders: the user grants one folder in the system folder picker; its documents
+                // are then listed every time without asking again (see DocumentFolders).
+                when (call.method) {
+                    "pickFolder" -> {
+                        pickFolder(result)
+                        return@setMethodCallHandler
+                    }
+                    "listFolder", "releaseFolder" -> {
+                        val tree = call.argument<String>("tree")?.let(Uri::parse)
+                        if (tree == null || tree.scheme != "content") {
+                            result.error("invalid_uri", "A content URI is required.", null)
+                        } else if (call.method == "listFolder") {
+                            inBackground(result) {
+                                DocumentFolders.list(
+                                    this,
+                                    tree,
+                                    call.argument<Int>("maxDepth") ?: 4,
+                                    call.argument<Int>("maxFiles") ?: 1000,
+                                )
+                            }
+                        } else {
+                            DocumentFolders.release(this, tree)
+                            result.success(null)
+                        }
+                        return@setMethodCallHandler
+                    }
+                }
                 val uri = call.argument<String>("uri")?.let(Uri::parse)
                 if (uri == null || uri.scheme != "content") {
                     result.error("invalid_uri", "A content URI is required.", null)
@@ -68,6 +95,15 @@ class MainActivity : FlutterActivity() {
                 when (call.method) {
                     "info" -> inBackground(result) { documentInfo(uri) }
                     "read" -> inBackground(result) { readStart(uri, call.argument<Int>("maxBytes") ?: 0) }
+                    // The text of one PDF or DOCX, only when the user asks the assistant about it.
+                    "extractText" -> inBackground(result) {
+                        DocumentText.extract(
+                            this,
+                            uri,
+                            call.argument<String>("type") ?: "",
+                            call.argument<Int>("maxChars") ?: 0,
+                        )
+                    }
                     "open" -> result.success(
                         openDocument(uri, call.argument<String>("mimeType"), call.argument<Boolean>("anyApp") == true)
                     )
@@ -113,6 +149,47 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         io.shutdown()
         super.onDestroy()
+    }
+
+    /** The folder picker's pending answer; one picker at a time. */
+    private var pendingFolder: MethodChannel.Result? = null
+
+    /** Opens the system folder picker (only when the user asked). Replies {uri, name} or null. */
+    private fun pickFolder(result: MethodChannel.Result) {
+        if (pendingFolder != null) {
+            result.error("busy", "The folder picker is already open.", null)
+            return
+        }
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        try {
+            pendingFolder = result
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, REQUEST_FOLDER)
+        } catch (e: ActivityNotFoundException) {
+            pendingFolder = null
+            result.success(null)
+        }
+    }
+
+    @Deprecated("Uses the platform result callback the folder picker needs.")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_FOLDER) return
+        val result = pendingFolder ?: return
+        pendingFolder = null
+        val tree = data?.data
+        if (resultCode != RESULT_OK || tree == null) {
+            result.success(null)
+            return
+        }
+        inBackground(result) { DocumentFolders.keep(this, tree) }
+    }
+
+    private companion object {
+        const val REQUEST_FOLDER = 4711
     }
 
     /** Runs [work] off the UI thread (provider queries and reads can be slow) and replies on it. */

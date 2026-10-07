@@ -88,8 +88,15 @@ async function draftFor(
   ctx: ToolContext,
   channel: ChatActionChannel,
   recipient: Recipient,
-  content: { message?: string; subject?: string; documentName?: string; shareContactNumber?: string } & ShareInput,
+  content: {
+    message?: string;
+    subject?: string;
+    documentName?: string;
+    shareDocument?: boolean;
+    shareContactNumber?: string;
+  } & ShareInput,
 ): Promise<ToolResult<ActionDraft>> {
+  const sharesDocument = content.shareDocument === true || !!content.documentName;
   if (!recipient.name && !recipient.address) {
     return fail("INVALID_ARGUMENTS", "Say who to send it to: ask the user for the contact's name.");
   }
@@ -99,7 +106,7 @@ async function draftFor(
   }
 
   if (content.shareContactNumber) {
-    if (content.share || content.documentName) {
+    if (content.share || sharesDocument) {
       return fail("INVALID_ARGUMENTS", "Share either a contact's number, locations or a document, not several.");
     }
     // The message is built only after the user picks the contact and number on the phone, so any
@@ -124,7 +131,7 @@ async function draftFor(
   let subject = content.subject?.trim() || null;
 
   if (content.share) {
-    if (content.documentName) return fail("INVALID_ARGUMENTS", "Share either locations or a document, not both.");
+    if (sharesDocument) return fail("INVALID_ARGUMENTS", "Share either locations or a document, not both.");
     if (!(await hasPermission(ctx.userId, PermissionType.LOCATION))) return permissionRequired(PermissionType.LOCATION);
     // "Share my location" without a day means today's.
     const period = content.period ?? (content.startDate ? undefined : "today");
@@ -139,10 +146,11 @@ async function draftFor(
     type = content.share === "travel_history" ? ChatActionType.SHARE_TRAVEL_HISTORY : ChatActionType.SHARE_LOCATION;
     dataSummary = shared.dataSummary;
     subject ??= `Child Assist - ${shared.title}`;
-  } else if (content.documentName) {
+  } else if (sharesDocument) {
     if (!(await hasPermission(ctx.userId, PermissionType.DOCUMENTS))) return permissionRequired(PermissionType.DOCUMENTS);
     type = ChatActionType.SHARE_DOCUMENT;
-    dataSummary = `Document: ${content.documentName}`;
+    // Filled in with the real file name once the user picks the document on the phone.
+    dataSummary = null;
   } else if (!message) {
     return fail("INVALID_ARGUMENTS", "Write the message to send. Ask the user what to say if it is not clear.");
   }
@@ -157,10 +165,17 @@ async function draftFor(
     subject: channel === ChatActionChannel.EMAIL ? (subject ?? "Child Assist details") : null,
     message,
     dataSummary,
-    documentQuery: content.documentName ?? null,
+    documentQuery: content.documentName || null,
     sharedContactQuery: null,
   });
 }
+
+const documentsByEmailUnsupported = fail(
+  "NOT_SUPPORTED",
+  "Documents stay on the user's phone and Child Assist cannot attach them to an email, so nothing was " +
+    "prepared and nothing was sent. Tell the user that plainly, and offer to share the document on " +
+    "WhatsApp instead, or with the Share button on the document (which lets them pick their email app).",
+);
 
 export function webTools(ctx: ToolContext) {
   return {
@@ -237,19 +252,19 @@ export function communicationTools(ctx: ToolContext) {
           .optional()
           .describe("The email text. For 'ye details', write the details from this conversation."),
         documentName: z.string().trim().max(120).optional().describe("Not supported for email"),
+        shareDocument: z.boolean().optional().describe("Not supported for email"),
         ...shareContactField,
         ...shareFields,
       }),
       selfAudited: true,
-      execute: async ({ recipientName, recipientEmail, subject, message, documentName, shareContactNumber, ...share }, toolCtx) => {
+      execute: async (
+        { recipientName, recipientEmail, subject, message, documentName, shareDocument, shareContactNumber, ...share },
+        toolCtx,
+      ) => {
+        // Checked first: whatever the configuration, a document is never attached to an email.
+        if (documentName || shareDocument) return documentsByEmailUnsupported;
         if (!emailConfigured()) {
           return fail("ACTION_NOT_CONFIGURED", "Sending email is not set up on the Child Assist server. Nothing was prepared.");
-        }
-        if (documentName) {
-          return fail(
-            "NOT_SUPPORTED",
-            "Documents stay on the user's phone and cannot be attached to an email yet. They can be shared on WhatsApp instead.",
-          );
         }
         if (recipientEmail !== undefined && !isValidEmail(recipientEmail)) {
           return fail(
@@ -290,12 +305,22 @@ export function communicationTools(ctx: ToolContext) {
           .max(120)
           .regex(/^[^\r\n\t<>"]+$/)
           .optional()
-          .describe("To share one of the user's documents: words from its file name"),
+          .describe(
+            "To share one of the user's documents: the words the user used for it, e.g. 'python pdf' " +
+              "or 'tcs'. The app searches the user's documents on the phone and the user picks the file.",
+          ),
+        shareDocument: z
+          .boolean()
+          .optional()
+          .describe("true to share a document the user did not name ('send the document to Papa'); the user picks it"),
         ...shareContactField,
         ...shareFields,
       }),
       selfAudited: true,
-      execute: async ({ recipientName, recipientPhone, message, documentName, shareContactNumber, ...share }, toolCtx) => {
+      execute: async (
+        { recipientName, recipientPhone, message, documentName, shareDocument, shareContactNumber, ...share },
+        toolCtx,
+      ) => {
         let phone: string | undefined;
         if (recipientPhone !== undefined) {
           phone = normalizePhone(recipientPhone) ?? undefined;
@@ -304,6 +329,7 @@ export function communicationTools(ctx: ToolContext) {
         const draft = await draftFor(toolCtx, ChatActionChannel.WHATSAPP, { name: recipientName, address: phone }, {
           message,
           documentName,
+          shareDocument,
           shareContactNumber,
           ...share,
         });

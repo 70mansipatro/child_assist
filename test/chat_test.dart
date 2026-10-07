@@ -334,10 +334,13 @@ void main() {
     expect(find.text('Searched your documents'), findsOneWidget);
     expect(find.text('Math Notes.txt'), findsOneWidget);
     expect(find.text('TXT'), findsWidgets);
-    expect(find.textContaining('Modified: '), findsOneWidget);
+    expect(find.textContaining('Modified Sep 14, 2026'), findsOneWidget);
+    expect(find.text('Available on this phone'), findsOneWidget);
     expect(find.text('history.pdf'), findsNothing);
 
-    await tester.tap(find.widgetWithText(TextButton, 'Open'));
+    await tester.ensureVisible(find.text('Open'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open'));
     await tester.pumpAndSettle();
     expect(find.byType(DocumentViewerScreen), findsOneWidget);
   });

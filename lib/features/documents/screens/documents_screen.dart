@@ -5,19 +5,26 @@ import 'package:flutter/material.dart';
 
 import '../../../core/navigation/app_menu.dart';
 import '../../../core/widgets/widgets.dart';
+import '../../contacts/services/message_handoff.dart';
 import '../services/document_service.dart';
 import '../widgets/document_card.dart';
+import '../widgets/document_share.dart';
 import 'document_viewer_screen.dart';
 
-/// The documents the user added from their device, with search and type/date filters.
+/// The documents Child Assist can access on this phone, with search and type/date filters.
 ///
-/// "Add Documents" opens the system file picker, which is also how access is granted: there is
-/// no permission dialog of Child Assist's own. Documents stay on the device; only their details
-/// are listed here.
+/// Opening the screen lists them straight away; it never opens a picker by itself. Android only
+/// lets an app see documents the user allowed, without "all files access" (which Child Assist does
+/// not use): folders the user connected once in the system folder picker (every PDF, Word and
+/// text file in them, listed live each time), and files picked one by one. A first-time user who
+/// has allowed nothing yet is told exactly that, with a button to choose a folder.
 class DocumentsScreen extends StatefulWidget {
-  const DocumentsScreen({super.key, required this.documentService});
+  const DocumentsScreen({super.key, required this.documentService, this.messageHandoff});
 
   final DocumentService documentService;
+
+  /// WhatsApp and the share sheet, for Share and WhatsApp on each document. Hidden without it.
+  final MessageHandoff? messageHandoff;
 
   @override
   State<DocumentsScreen> createState() => _DocumentsScreenState();
@@ -28,13 +35,13 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
   final _search = TextEditingController();
 
   /// Null while loading.
-  List<DocumentItem>? _documents;
+  DocumentLibrary? _library;
   bool _loadFailed = false;
 
   /// IDs of documents that could not be found the last time they were checked.
   Set<String> _unavailable = {};
 
-  /// True while the file picker is open or picked documents are being read.
+  /// True while a picker is open or what was picked is being saved.
   bool _adding = false;
 
   String _query = '';
@@ -46,9 +53,9 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
   @override
   void initState() {
     super.initState();
-    // Files can be deleted or moved while the app is in the background.
+    // Files can be added, deleted or moved while the app is in the background.
     _lifecycle = AppLifecycleListener(onResume: () {
-      if (!_adding) unawaited(_checkAvailability());
+      if (!_adding) unawaited(_load());
     });
     _load();
   }
@@ -60,26 +67,45 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
     super.dispose();
   }
 
+  /// Lists the documents afresh: connected folders are read again, so new files show up.
   Future<void> _load() async {
     if (_loadFailed) setState(() => _loadFailed = false);
     try {
-      final documents = await _service.list();
+      final library = await _service.library(refresh: true);
       if (!mounted) return;
-      setState(() => _documents = documents);
+      setState(() => _library = library);
       unawaited(_checkAvailability());
     } on DocumentException {
       if (mounted) setState(() => _loadFailed = true);
     }
   }
 
+  /// Files picked one by one can vanish; files in a folder are listed live, so they just go.
   Future<void> _checkAvailability() async {
-    final documents = _documents;
-    if (documents == null || documents.isEmpty) return;
-    final unavailable = await _service.findUnavailable(documents);
+    final picked = _library?.documents.where((d) => !d.inFolder).toList() ?? const [];
+    if (picked.isEmpty) {
+      if (_unavailable.isNotEmpty && mounted) setState(() => _unavailable = {});
+      return;
+    }
+    final unavailable = await _service.findUnavailable(picked);
     if (mounted) setState(() => _unavailable = unavailable);
   }
 
-  Future<void> _add() async {
+  Future<void> _connectFolder() async {
+    setState(() => _adding = true);
+    try {
+      final folder = await _service.connectFolder();
+      if (!mounted || folder == null) return;
+      await _load();
+      _showSnack('Showing documents from ${folder.name}');
+    } on DocumentException catch (e) {
+      _showSnack('${e.message} Please try again.', retry: _connectFolder);
+    } finally {
+      if (mounted) setState(() => _adding = false);
+    }
+  }
+
+  Future<void> _pickFiles() async {
     setState(() => _adding = true);
     try {
       final result = await _service.addDocuments();
@@ -87,7 +113,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
       await _load();
       _showSnack(_addedMessage(result));
     } on DocumentException catch (e) {
-      _showSnack('${e.message} Please try again.', retry: _add);
+      _showSnack('${e.message} Please try again.', retry: _pickFiles);
     } finally {
       if (mounted) setState(() => _adding = false);
     }
@@ -112,6 +138,22 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
     ));
     // The viewer may have refreshed the details or removed the document.
     if (mounted) await _load();
+  }
+
+  /// Share or WhatsApp: asks first, checks the file is still there, then opens the other app.
+  Future<void> _share(DocumentItem document, {required bool toWhatsApp}) async {
+    final handoff = widget.messageHandoff;
+    if (handoff == null) return;
+    final outcome = await confirmAndShareDocument(
+      context,
+      document: document,
+      documentService: _service,
+      share: shareDocumentWith(handoff),
+      toWhatsApp: toWhatsApp,
+    );
+    if (!mounted) return;
+    if (outcome.unavailable) setState(() => _unavailable = {..._unavailable, document.id});
+    _showSnack(outcome.message);
   }
 
   Future<void> _confirmRemove(DocumentItem document) async {
@@ -141,6 +183,35 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
     }
   }
 
+  Future<void> _confirmDisconnect(DocumentFolder folder) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Stop showing this folder?'),
+        content: Text(
+          'Documents in "${folder.name}" will no longer be shown in Child Assist. The files stay on your device.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: AppColors.danger),
+            child: const Text('Remove folder'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await _service.disconnectFolder(folder);
+      if (!mounted) return;
+      await _load();
+      _showSnack('${folder.name} removed from Child Assist');
+    } on DocumentException catch (e) {
+      _showSnack(e.message);
+    }
+  }
+
   void _showSnack(String message, {VoidCallback? retry}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -160,21 +231,20 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
         _dateFilter = DocumentDateFilter.all;
       });
 
-  /// Documents matching the search text (name or type) and the filters.
+  /// Documents matching the filters and the search text (name words, partial words, or a type
+  /// such as "pdf"), best match first while searching.
   List<DocumentItem> _visible(List<DocumentItem> documents) {
-    final query = _query.trim().toLowerCase();
     final now = DateTime.now();
-    return documents.where((d) {
-      if (_type != null && d.type != _type) return false;
-      if (!_dateFilter.matches(d.date, now)) return false;
-      if (query.isEmpty) return true;
-      return d.name.toLowerCase().contains(query) || d.type.extension == query.replaceFirst('.', '');
-    }).toList();
+    final filtered = documents
+        .where((d) => (_type == null || d.type == _type) && _dateFilter.matches(d.date, now))
+        .toList();
+    if (_query.trim().isEmpty) return filtered;
+    return DocumentSearch.search(filtered, _query, conversational: false).documents;
   }
 
   @override
   Widget build(BuildContext context) {
-    final documents = _documents;
+    final library = _library;
     return Scaffold(
       appBar: AppBar(
         flexibleSpace: const AppBarGradient(),
@@ -182,8 +252,33 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
         actions: [
           IconButton(
             tooltip: 'Refresh',
-            onPressed: _adding || documents == null ? null : _load,
+            onPressed: _adding || library == null ? null : _load,
             icon: const Icon(Icons.refresh_rounded),
+          ),
+          PopupMenuButton<String>(
+            tooltip: 'Add documents',
+            enabled: !_adding,
+            icon: _adding ? const ButtonSpinner(size: 20) : const Icon(Icons.add_rounded),
+            onSelected: (choice) => choice == 'folder' ? _connectFolder() : _pickFiles(),
+            itemBuilder: (_) => [
+              if (_service.supportsFolders)
+                const PopupMenuItem(
+                  value: 'folder',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.folder_open_rounded),
+                    title: Text('Choose a folder'),
+                  ),
+                ),
+              const PopupMenuItem(
+                value: 'files',
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.note_add_rounded),
+                  title: Text('Pick files'),
+                ),
+              ),
+            ],
           ),
           const AppMenuButton(current: AppDestination.documents),
           const SizedBox(width: 8),
@@ -192,7 +287,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
       body: SafeArea(
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 300),
-          child: switch (documents) {
+          child: switch (library) {
             _ when _loadFailed => StateMessage(
                 key: const ValueKey('error'),
                 icon: Icons.error_outline_rounded,
@@ -205,40 +300,41 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                   label: const Text('Retry'),
                 ),
               ),
-            null => const Center(key: ValueKey('loading'), child: CircularProgressIndicator()),
-            [] => StateMessage(
-                key: const ValueKey('empty'),
-                icon: Icons.description_rounded,
-                gradient: AppGradients.documents,
-                title: 'No documents yet',
-                body: 'Add a document from your device to see it here.',
-                action: _addButton(),
+            null => const Center(
+                key: ValueKey('loading'),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [CircularProgressIndicator(), SizedBox(height: 12), Text('Loading documents...')],
+                ),
               ),
-            final documents => _buildList(context, documents),
+            DocumentLibrary(documents: [], folders: []) => _AccessIntro(
+                key: const ValueKey('intro'),
+                busy: _adding,
+                foldersSupported: _service.supportsFolders,
+                onChooseFolder: _connectFolder,
+                onPickFiles: _pickFiles,
+              ),
+            final library => _buildList(context, library),
           },
         ),
       ),
     );
   }
 
-  Widget _addButton() => GradientButton(
-        gradient: AppGradients.documents,
-        onPressed: _adding ? null : _add,
-        icon: _adding ? const ButtonSpinner(size: 18) : const Icon(Icons.add_rounded),
-        label: Text(_adding ? 'Adding documents...' : 'Add Documents'),
-      );
-
-  Widget _buildList(BuildContext context, List<DocumentItem> documents) {
+  Widget _buildList(BuildContext context, DocumentLibrary library) {
+    final documents = library.documents;
     final visible = _visible(documents);
+    final theme = Theme.of(context);
     return CustomScrollView(
       key: const ValueKey('list'),
       slivers: [
         SliverToBoxAdapter(child: _buildControls(context)),
+        if (library.folders.isNotEmpty) SliverToBoxAdapter(child: _buildFolders(context, library.folders)),
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 10),
             child: SectionTitle(
-              'Recent Documents',
+              'Your Documents',
               subtitle: _filtering
                   ? '${visible.length} of ${documents.length} match'
                   : documents.length == 1
@@ -247,7 +343,19 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
             ),
           ),
         ),
-        if (visible.isEmpty)
+        if (documents.isEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+              child: AppCard(
+                child: Text(
+                  'No PDF, Word or text files in your folders yet. Files you save there will show up here.',
+                  style: theme.textTheme.bodyMedium,
+                ),
+              ),
+            ),
+          )
+        else if (visible.isEmpty)
           // Compact, so it stays in view above the keyboard while searching.
           SliverToBoxAdapter(
             child: Padding(
@@ -261,8 +369,8 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('No matching documents', style: Theme.of(context).textTheme.titleSmall),
-                          Text('Try a different search or filter.', style: Theme.of(context).textTheme.bodySmall),
+                          Text('No matching documents', style: theme.textTheme.titleSmall),
+                          Text('Try a different search or filter.', style: theme.textTheme.bodySmall),
                         ],
                       ),
                     ),
@@ -287,13 +395,60 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                     document: document,
                     unavailable: _unavailable.contains(document.id),
                     onTap: () => _open(document),
-                    onRemove: () => _confirmRemove(document),
+                    // A file in a connected folder is removed by removing the folder.
+                    onRemove: document.inFolder ? null : () => _confirmRemove(document),
+                    onShare: widget.messageHandoff == null ? null : () => _share(document, toWhatsApp: false),
+                    onWhatsApp: widget.messageHandoff == null ? null : () => _share(document, toWhatsApp: true),
                   ),
                 );
               },
             ),
           ),
       ],
+    );
+  }
+
+  /// Which folders the list comes from, and any whose access was lost.
+  Widget _buildFolders(BuildContext context, List<FolderStatus> folders) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final status in folders.where((s) => !s.available))
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: InfoBanner(
+                tone: BannerTone.warning,
+                icon: Icons.folder_off_rounded,
+                title: 'Child Assist can no longer see "${status.folder.name}".',
+                message: const Text('The folder was moved or deleted, or its access was removed in Android settings.'),
+                actions: [
+                  TextButton(onPressed: () => _confirmDisconnect(status.folder), child: const Text('Remove folder')),
+                  if (_service.supportsFolders)
+                    FilledButton(onPressed: _connectFolder, child: const Text('Choose folder again')),
+                ],
+              ),
+            ),
+          Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text('From your folders:', style: theme.textTheme.labelMedium),
+              for (final status in folders.where((s) => s.available))
+                InputChip(
+                  avatar: const Icon(Icons.folder_rounded, size: 18),
+                  label: Text(status.truncated ? '${status.folder.name} (first ${status.count})' : status.folder.name),
+                  tooltip: 'Remove ${status.folder.name}',
+                  onDeleted: () => _confirmDisconnect(status.folder),
+                  deleteButtonTooltipMessage: 'Remove ${status.folder.name}',
+                ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -322,8 +477,6 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
             ),
           ),
           const SizedBox(height: 12),
-          _addButton(),
-          const SizedBox(height: 12),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
@@ -342,6 +495,69 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
                 ],
               ],
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Shown only while the user has allowed Child Assist no documents at all. It says honestly what
+/// Android allows, and opens a picker only when the user taps a button.
+class _AccessIntro extends StatelessWidget {
+  const _AccessIntro({
+    super.key,
+    required this.busy,
+    required this.foldersSupported,
+    required this.onChooseFolder,
+    required this.onPickFiles,
+  });
+
+  final bool busy;
+  final bool foldersSupported;
+  final VoidCallback onChooseFolder;
+  final VoidCallback onPickFiles;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Center(child: IconBadge(icon: Icons.folder_open_rounded, gradient: AppGradients.documents, size: 72)),
+          const SizedBox(height: 20),
+          Text('Show your documents here', style: theme.textTheme.titleLarge, textAlign: TextAlign.center),
+          const SizedBox(height: 10),
+          Text(
+            foldersSupported
+                ? 'Android only lets apps see the documents you allow. Choose a folder once, for example '
+                    'Documents or a folder inside Download, and every PDF, Word and text file in it will '
+                    'show here each time you open Documents, including new ones.'
+                : 'Your phone only lets apps see the documents you choose. Pick the files to show here.',
+            style: theme.textTheme.bodyMedium,
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Child Assist only reads them on your phone. Nothing is uploaded.',
+            style: theme.textTheme.bodySmall,
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 24),
+          if (foldersSupported)
+            GradientButton(
+              gradient: AppGradients.documents,
+              onPressed: busy ? null : onChooseFolder,
+              icon: busy ? const ButtonSpinner(size: 18) : const Icon(Icons.folder_open_rounded),
+              label: const Text('Choose folder'),
+            ),
+          const SizedBox(height: 8),
+          TextButton.icon(
+            onPressed: busy ? null : onPickFiles,
+            icon: const Icon(Icons.note_add_rounded),
+            label: const Text('Pick individual files'),
           ),
         ],
       ),

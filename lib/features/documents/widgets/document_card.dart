@@ -74,21 +74,38 @@ class DocumentTypeBadge extends StatelessWidget {
 }
 
 /// One document in the list: type, name, size and date. Tapping opens it; the menu removes it.
+/// With [onShare] / [onWhatsApp], available documents also show Open, Share and WhatsApp.
 class DocumentCard extends StatelessWidget {
   const DocumentCard({
     super.key,
     required this.document,
     required this.onTap,
-    required this.onRemove,
+    this.onRemove,
     this.unavailable = false,
+    this.onShare,
+    this.onWhatsApp,
   });
 
   final DocumentItem document;
   final VoidCallback onTap;
-  final VoidCallback onRemove;
+
+  /// Null for a document shown from a connected folder: the folder is removed instead.
+  final VoidCallback? onRemove;
+  final VoidCallback? onShare;
+  final VoidCallback? onWhatsApp;
 
   /// The document could not be found the last time it was checked.
   final bool unavailable;
+
+  static Widget _action(IconData icon, String label, VoidCallback onPressed) => OutlinedButton.icon(
+        onPressed: onPressed,
+        style: OutlinedButton.styleFrom(
+          visualDensity: VisualDensity.compact,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+        ),
+        icon: Icon(icon, size: 16),
+        label: Text(label),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -118,6 +135,7 @@ class DocumentCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(subtitle, style: theme.textTheme.bodySmall),
+                  if (document.folderName != null) Text('In ${document.folderName}', style: theme.textTheme.labelSmall),
                   if (unavailable) ...[
                     const SizedBox(height: 4),
                     Row(
@@ -130,26 +148,38 @@ class DocumentCard extends StatelessWidget {
                         ),
                       ],
                     ),
+                  ] else if (onShare != null || onWhatsApp != null) ...[
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      children: [
+                        _action(Icons.open_in_new_rounded, 'Open', onTap),
+                        if (onShare != null) _action(Icons.share_rounded, 'Share', onShare!),
+                        if (onWhatsApp != null) _action(Icons.chat_rounded, 'WhatsApp', onWhatsApp!),
+                      ],
+                    ),
                   ],
                 ],
               ),
             ),
             // onSelected runs after the menu has closed, so it can safely show a dialog.
-            PopupMenuButton<String>(
-              tooltip: 'More options for ${document.name}',
-              icon: const Icon(Icons.more_vert_rounded),
-              onSelected: (_) => onRemove(),
-              itemBuilder: (_) => [
-                const PopupMenuItem(
-                  value: 'remove',
-                  child: ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.remove_circle_outline_rounded),
-                    title: Text('Remove from Child Assist'),
+            if (onRemove != null)
+              PopupMenuButton<String>(
+                tooltip: 'More options for ${document.name}',
+                icon: const Icon(Icons.more_vert_rounded),
+                onSelected: (_) => onRemove!(),
+                itemBuilder: (_) => [
+                  const PopupMenuItem(
+                    value: 'remove',
+                    child: ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.remove_circle_outline_rounded),
+                      title: Text('Remove from Child Assist'),
+                    ),
                   ),
-                ),
-              ],
-            ),
+                ],
+              ),
           ],
         ),
       ),

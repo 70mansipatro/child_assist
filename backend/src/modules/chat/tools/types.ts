@@ -65,6 +65,13 @@ export interface PendingActionView {
   /** For a document share: the document name to match among the documents on the phone. */
   documentQuery: string | null;
   /**
+   * For a document share: the one document the user picked on the phone (the app's opaque id for
+   * it, its file name and type). Null until picked; the action cannot be confirmed before that.
+   */
+  documentId: string | null;
+  documentName: string | null;
+  documentType: string | null;
+  /**
    * For SHARE_CONTACT: the contact whose number is shared (not the recipient). While
    * [sharedContactPhone] is null the app looks [sharedContactQuery] up on the phone and the user
    * picks the contact and number; the message is then built from exactly that.

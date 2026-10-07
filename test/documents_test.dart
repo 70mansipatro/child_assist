@@ -48,7 +48,21 @@ void main() {
     if (find.text('Log in').evaluate().isNotEmpty) await logIn(tester, email);
   }
 
-  Future<void> openDocuments(WidgetTester tester) => tapVisible(tester, find.text('Documents'));
+  /// The list of every document Child Assist can see (reached from a picked document's viewer
+  /// in the app), pushed directly so list tests do not go through the picker.
+  Future<void> openDocuments(WidgetTester tester) async {
+    unawaited(tester.state<NavigatorState>(find.byType(Navigator).first).push(MaterialPageRoute<void>(
+      builder: (_) => DocumentsScreen(documentService: services.documentService, messageHandoff: services.messageHandoff),
+    )));
+    await tester.pumpAndSettle();
+  }
+
+  /// Taps Documents on Home, which opens the system picker straight away; the user picks [files]
+  /// (none = Cancel).
+  Future<void> tapDocumentsButton(WidgetTester tester, [List<FakeDocumentFile> files = const []]) async {
+    if (files.isNotEmpty) device.willPick(files);
+    await tapVisible(tester, find.text('Documents'));
+  }
 
   FakeDocumentFile pdf([String name = 'school_notes.pdf']) =>
       device.addFile(name, mimeType: 'application/pdf', size: 245760, modifiedAt: sep14);
@@ -61,10 +75,18 @@ void main() {
   FakeDocumentFile txt([String name = 'reading.txt', String content = 'Chapter 1\nThe quick brown fox.']) =>
       device.addFile(name, mimeType: 'text/plain', size: 1200, modifiedAt: sep14, content: content);
 
-  /// Taps "Add Documents" with the user picking [files] (none = Cancel).
+  /// Picks files with the user choosing [files] (none = Cancel): from the first-time screen,
+  /// or from the Add menu once documents are listed.
   Future<void> addDocuments(WidgetTester tester, [List<FakeDocumentFile> files = const []]) async {
     if (files.isNotEmpty) device.willPick(files);
-    await tester.tap(find.text('Add Documents'));
+    final intro = find.text('Pick individual files');
+    if (intro.evaluate().isNotEmpty) {
+      await tester.tap(intro);
+    } else {
+      await tester.tap(find.byTooltip('Add documents'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Pick files'));
+    }
     await tester.pumpAndSettle();
   }
 
@@ -81,28 +103,185 @@ void main() {
 
   Finder card(String name) => find.ancestor(of: find.text(name), matching: find.byType(DocumentCard));
 
-  group('Documents screen', () {
-    testWidgets('1. opens from Home without any permission dialog', (tester) async {
+  group('Documents button', () {
+    testWidgets('opens the Android document picker straight away, with no screen or permission first',
+        (tester) async {
       await startApp(tester);
       expect(find.text('Documents'), findsOneWidget);
       expect(find.text('Find your notes and files'), findsOneWidget);
 
-      await openDocuments(tester);
-      expect(find.byType(DocumentsScreen), findsOneWidget);
+      final picking = device.pendingPick = Completer<void>();
+      await tapVisible(tester, find.text('Documents'));
+      expect(device.pickerShown, 1);
+      expect(device.pickedExtensions.single, ['pdf', 'doc', 'docx', 'txt']);
+      expect(device.pickedMultiple.single, isFalse, reason: 'one document is picked and opened');
+      expect(device.folderPickerShown, 0);
+      expect(find.byType(DocumentsScreen), findsNothing);
+      expect(find.text('Show your documents here'), findsNothing);
+      expect(find.text('No documents yet'), findsNothing);
+      expect(find.text('Add Documents'), findsNothing);
       expect(os.calls, isEmpty, reason: 'documents use the system picker, not a runtime permission');
       expect(os.dialogsShown, isEmpty);
+
+      // A second tap while the picker is opening does not open another one.
+      await tapVisible(tester, find.text('Documents'));
+      expect(device.pickerShown, 1);
+      picking.complete();
+      await tester.pumpAndSettle();
     });
 
-    testWidgets('2. empty state', (tester) async {
+    testWidgets('cancelling the picker returns to Home with no error', (tester) async {
+      await startApp(tester);
+      await tapDocumentsButton(tester); // cancelled
+
+      expect(device.pickerShown, 1);
+      expect(dashboard(), findsOneWidget);
+      expect(find.byType(DocumentViewerScreen), findsNothing);
+      expect(find.byType(DocumentsScreen), findsNothing);
+      expect(find.byType(SnackBar), findsNothing);
+      expect(await services.documentService.list(), isEmpty);
+      expect(tester.takeException(), isNull);
+
+      // The button still works afterwards.
+      await tapDocumentsButton(tester, [pdf()]);
+      expect(find.byType(DocumentViewerScreen), findsOneWidget);
+    });
+
+    testWidgets('a picked PDF is kept for this user and opens in the viewer', (tester) async {
+      await startApp(tester);
+      final file = pdf();
+      await tapDocumentsButton(tester, [file]);
+
+      expect(find.byType(DocumentViewerScreen), findsOneWidget);
+      expect(find.text('PDF document'), findsOneWidget);
+      expect(device.reads, isEmpty, reason: 'PDF contents are never read just to show it');
+      final stored = (await services.documentService.list()).single;
+      expect(stored.reference, file.reference);
+      expect(stored.type, DocumentType.pdf);
+
+      await tester.tap(find.text('Open document'));
+      await tester.pumpAndSettle();
+      expect(device.opened, ['${file.reference} application/pdf']);
+
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(dashboard(), findsOneWidget);
+    });
+
+    testWidgets('DOCX opens in the viewer and TXT is previewed in the app', (tester) async {
+      await startApp(tester);
+      final word = docx();
+      await tapDocumentsButton(tester, [word]);
+      expect(find.text('DOCX document'), findsOneWidget);
+      await tester.tap(find.text('Open document'));
+      await tester.pumpAndSettle();
+      expect(device.opened.single, startsWith('${word.reference} application/vnd.openxmlformats'));
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+
+      await tapDocumentsButton(tester, [txt()]);
+      expect(find.text('Preview'), findsOneWidget);
+      expect(find.textContaining('The quick brown fox.'), findsOneWidget);
+      expect(
+        (await services.documentService.list()).map((d) => d.type),
+        unorderedEquals([DocumentType.docx, DocumentType.txt]),
+      );
+    });
+
+    testWidgets('picking the same document again opens it without a duplicate', (tester) async {
+      await startApp(tester);
+      final file = pdf();
+      await tapDocumentsButton(tester, [file]);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      await tapDocumentsButton(tester, [file]);
+
+      expect(find.byType(DocumentViewerScreen), findsOneWidget);
+      expect(await services.documentService.list(), hasLength(1));
+    });
+
+    testWidgets('an unsupported file is not kept, its access is released, and Home says why', (tester) async {
+      await startApp(tester);
+      final sheet = device.addFile('marks.xlsx', mimeType: 'application/vnd.ms-excel');
+      await tapDocumentsButton(tester, [sheet]);
+
+      expect(find.text('Only PDF, DOC, DOCX and TXT documents are supported.'), findsOneWidget);
+      expect(find.byType(DocumentViewerScreen), findsNothing);
+      expect(dashboard(), findsOneWidget);
+      expect(device.released, [sheet.reference]);
+      expect(await services.documentService.list(), isEmpty);
+    });
+
+    testWidgets('a picker failure shows a friendly message without raw details', (tester) async {
+      await startApp(tester);
+      device.pickError = Exception('/storage/emulated/0/secret.pdf: picker crashed');
+      await tapDocumentsButton(tester);
+
+      expect(find.text('Unable to add documents.'), findsOneWidget);
+      expect(find.textContaining('secret'), findsNothing);
+      expect(dashboard(), findsOneWidget);
+    });
+
+    testWidgets('the viewer shares on WhatsApp only after Confirm and never says sent', (tester) async {
+      await startApp(tester);
+      final handoff = services.messageHandoff as FakeMessageHandoff;
+      final file = pdf();
+      await tapDocumentsButton(tester, [file]);
+
+      await tester.tap(find.byTooltip('Send on WhatsApp'));
+      await tester.pumpAndSettle();
+      expect(find.text('Send on WhatsApp?'), findsOneWidget);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(handoff.calls, isEmpty);
+
+      await tester.tap(find.byTooltip('Send on WhatsApp'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Confirm'));
+      await tester.pumpAndSettle();
+      expect(handoff.calls, ['whatsapp-document null: ${file.reference}']);
+      expect(find.text('WhatsApp opened. Choose the chat, then tap Send to send the document.'), findsOneWidget);
+      expect(find.textContaining(RegExp('successfully|was sent', caseSensitive: false)), findsNothing);
+    });
+
+    testWidgets('"Your documents" in the viewer lists every document Child Assist can see', (tester) async {
+      await startApp(tester);
+      await tapDocumentsButton(tester, [pdf()]);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      await tapDocumentsButton(tester, [docx()]);
+
+      await tester.tap(find.byTooltip('Your documents'));
+      await tester.pumpAndSettle();
+      expect(find.byType(DocumentsScreen), findsOneWidget);
+      expect(find.byType(DocumentCard), findsNWidgets(2));
+      expect(device.pickerShown, 2, reason: 'the list does not open the picker by itself');
+    });
+
+    testWidgets('a document picked by one account is not seen by another', (tester) async {
+      await startApp(tester);
+      await tapDocumentsButton(tester, [txt('diary.txt', 'private words')]);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      await logOut(tester);
+      await logIn(tester, 'ravi@example.com');
+
+      expect(await services.documentService.list(), isEmpty);
+      expect((await services.documentService.search('diary')).matches, isEmpty);
+    });
+  });
+
+  group('Documents screen', () {
+    testWidgets('nothing allowed yet: the Android rule is explained; no picker opens by itself', (tester) async {
       await startApp(tester);
       await openDocuments(tester);
-      expect(find.text('No documents yet'), findsOneWidget);
-      expect(find.text('Add a document from your device to see it here.'), findsOneWidget);
-      expect(find.widgetWithText(GradientButton, 'Add Documents'), findsOneWidget);
-      expect(device.pickerShown, 0, reason: 'the picker opens only when asked');
+      expect(find.text('Show your documents here'), findsOneWidget);
+      expect(find.textContaining('Android only lets apps see the documents you allow'), findsOneWidget);
+      expect(device.pickerShown, 0, reason: 'the list opens the picker only when asked');
+      expect(device.folderPickerShown, 0);
     });
 
-    testWidgets('3, 23. Add Documents opens the system picker for supported types, with a loading state',
+    testWidgets('3, 23. Pick files opens the system picker for supported types, with a loading state',
         (tester) async {
       await startApp(tester);
       await openDocuments(tester);
@@ -110,17 +289,17 @@ void main() {
       device.willPick([file]);
       final picking = device.pendingPick = Completer<void>();
 
-      await tester.tap(find.text('Add Documents'));
+      await tester.tap(find.text('Pick individual files'));
       await tester.pump();
       expect(device.pickerShown, 1);
       expect(device.pickedExtensions.single, ['pdf', 'doc', 'docx', 'txt']);
-      expect(find.text('Adding documents...'), findsOneWidget);
+      expect(find.byType(ButtonSpinner), findsWidgets);
       final button = tester.widget<GradientButton>(find.byType(GradientButton));
       expect(button.onPressed, isNull, reason: 'cannot open a second picker meanwhile');
 
       picking.complete();
       await tester.pumpAndSettle();
-      expect(find.text('Adding documents...'), findsNothing);
+      expect(find.byType(ButtonSpinner), findsNothing);
       expect(find.text('school_notes.pdf'), findsOneWidget);
     });
 
@@ -131,7 +310,7 @@ void main() {
 
       expect(find.text('Added 1 document'), findsOneWidget);
       expect(find.byType(DocumentCard), findsOneWidget);
-      expect(find.text('Recent Documents'), findsOneWidget);
+      expect(find.text('Your Documents'), findsOneWidget);
       expect(find.text('1 document'), findsOneWidget);
     });
 
@@ -141,7 +320,7 @@ void main() {
       await addDocuments(tester); // cancelled
 
       expect(device.pickerShown, 1);
-      expect(find.text('No documents yet'), findsOneWidget);
+      expect(find.text('Show your documents here'), findsOneWidget);
       expect(find.byType(SnackBar), findsNothing);
       expect(find.byType(DocumentCard), findsNothing);
       expect(await services.documentService.list(), isEmpty);
@@ -210,7 +389,9 @@ void main() {
 
       final added = (await services.documentService.list()).single;
       final today = MaterialLocalizations.of(tester.element(find.byType(DocumentsScreen)));
-      final label = '${today.formatShortMonthDay(added.addedAt)}, ${today.formatYear(added.addedAt)}';
+      // Stored as UTC; shown as the local date (they differ for part of the day in most zones).
+      final addedAt = added.addedAt.toLocal();
+      final label = '${today.formatShortMonthDay(addedAt)}, ${today.formatYear(addedAt)}';
       expect(find.text('Added $label'), findsOneWidget, reason: 'no size, no modified date');
 
       await openDocument(tester, 'scan.pdf');
@@ -296,6 +477,9 @@ void main() {
     });
 
     testWidgets('12. date filter', (tester) async {
+      // Tall enough that the lazily built list shows every card at once.
+      tester.view.physicalSize = const Size(2400, 4800);
+      addTearDown(tester.view.resetPhysicalSize);
       await startApp(tester);
       await openDocuments(tester);
       final now = DateTime.now();
@@ -526,7 +710,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Removed from Child Assist'), findsOneWidget);
-      expect(find.text('No documents yet'), findsOneWidget);
+      expect(find.text('Show your documents here'), findsOneWidget);
       expect(device.files, contains(file.reference), reason: 'the file stays on the device');
       expect(device.released, [file.reference]);
     });
@@ -555,7 +739,7 @@ void main() {
       await logOut(tester);
       await logIn(tester, 'ravi@example.com');
       await openDocuments(tester);
-      expect(find.text('No documents yet'), findsOneWidget);
+      expect(find.text('Show your documents here'), findsOneWidget);
 
       // Ravi adds the same file, then removes it: Mansi still uses it, so access is kept.
       await addDocuments(tester, [file]);

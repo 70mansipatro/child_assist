@@ -96,6 +96,49 @@ class ChatService {
         (token) => _api.chooseSharedContact(token, id, name: name, phone: phone, conversationId: conversationId),
       );
 
+  Future<PendingAction> chooseDocument(
+    String id, {
+    required String documentId,
+    required String name,
+    required String type,
+    String? conversationId,
+  }) =>
+      _auth.authorized(
+        (token) => _api.chooseDocument(
+          token,
+          id,
+          documentId: documentId,
+          name: name,
+          type: type,
+          conversationId: conversationId,
+        ),
+      );
+
+  Future<ChatMessage> answerDocumentRead(
+    String requestId, {
+    required String documentId,
+    required String name,
+    required String type,
+    required String text,
+    required bool truncated,
+    String? conversationId,
+  }) =>
+      _auth.authorized(
+        (token) => _api.answerDocumentRead(
+          token,
+          requestId,
+          documentId: documentId,
+          name: name,
+          type: type,
+          text: text,
+          truncated: truncated,
+          conversationId: conversationId,
+        ),
+      );
+
+  Future<ChatMessage?> failDocumentRead(String requestId, String reason, {String? conversationId}) =>
+      _auth.authorized((token) => _api.failDocumentRead(token, requestId, reason, conversationId: conversationId));
+
   Future<ActionOutcome> confirmAction(String id, {String? conversationId}) =>
       _auth.authorized((token) => _api.confirmAction(token, id, conversationId: conversationId));
 

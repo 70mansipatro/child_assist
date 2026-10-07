@@ -128,6 +128,69 @@ class ChatApi {
     return action;
   }
 
+  /// For sharing a document: the one document the user picked on this phone. Only its id in the
+  /// user's own list, its file name and its type are sent: never its location or contents.
+  Future<PendingAction> chooseDocument(
+    String token,
+    String id, {
+    required String documentId,
+    required String name,
+    required String type,
+    String? conversationId,
+  }) async {
+    final json = await _client.post(
+      '/api/chat/actions/${Uri.encodeComponent(id)}/document',
+      token: token,
+      body: {'documentId': documentId, 'name': name, 'type': type, 'conversationId': ?conversationId},
+    );
+    final action = PendingAction.tryParse(json['action'] as Map<String, dynamic>? ?? const {});
+    if (action == null) throw ApiException('Something went wrong. Please try again.');
+    return action;
+  }
+
+  /// For a question about a document: the text this phone extracted from the ONE document the
+  /// user means (its id in the user's own list, name and type too; never its location). The server
+  /// answers from that text and returns the reply, which it stores; the text itself is not kept.
+  Future<ChatMessage> answerDocumentRead(
+    String token,
+    String requestId, {
+    required String documentId,
+    required String name,
+    required String type,
+    required String text,
+    required bool truncated,
+    String? conversationId,
+  }) async {
+    final json = await _client.post(
+      '/api/chat/document-reads/${Uri.encodeComponent(requestId)}/answer',
+      token: token,
+      timeout: replyTimeout,
+      body: {
+        'documentId': documentId,
+        'name': name,
+        'type': type,
+        'text': text,
+        'truncated': truncated,
+        'conversationId': ?conversationId,
+      },
+    );
+    final message = ChatMessage.fromJson(json['message'] as Map<String, dynamic>? ?? const {});
+    if (message == null) throw ApiException('Something went wrong. Please try again.');
+    return message;
+  }
+
+  /// For a question about a document: why this phone could not read it. The server stores and
+  /// returns the message to show.
+  Future<ChatMessage?> failDocumentRead(String token, String requestId, String reason, {String? conversationId}) async {
+    final json = await _client.post(
+      '/api/chat/document-reads/${Uri.encodeComponent(requestId)}/fail',
+      token: token,
+      body: {'reason': reason, 'conversationId': ?conversationId},
+    );
+    final raw = json['message'];
+    return raw is Map<String, dynamic> ? ChatMessage.fromJson(raw) : null;
+  }
+
   /// Runs an action the user explicitly confirmed. Returns the server's outcome.
   Future<ActionOutcome> confirmAction(String token, String id, {String? conversationId}) =>
       _action(token, id, 'confirm', {'conversationId': ?conversationId});

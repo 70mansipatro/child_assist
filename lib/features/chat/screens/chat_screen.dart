@@ -6,8 +6,9 @@ import '../../../core/widgets/widgets.dart';
 import '../../contacts/services/contact_service.dart';
 import '../../contacts/services/message_handoff.dart';
 import '../../documents/screens/document_viewer_screen.dart';
-import '../../documents/screens/documents_screen.dart';
+import '../../documents/screens/pick_document.dart';
 import '../../documents/services/document_service.dart';
+import '../../documents/widgets/document_share.dart' show shareDocumentWith;
 import '../../permissions/screens/permissions_screen.dart';
 import '../../permissions/services/permission_sync_service.dart';
 import '../../photos/screens/photo_viewer_screen.dart';
@@ -72,11 +73,16 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
-  late final ChatSession _session = ChatSession(service: widget.chatService, handoff: widget.messageHandoff);
+  late final ChatSession _session = ChatSession(
+    service: widget.chatService,
+    handoff: widget.messageHandoff,
+    documents: widget.documentService,
+  );
   final _input = TextEditingController();
   final _focus = FocusNode();
 
   late final ChatResultContext _results = ChatResultContext(
+    session: _session,
     documentService: widget.documentService,
     galleryService: widget.galleryService,
     contactService: widget.contactService,
@@ -84,13 +90,21 @@ class _ChatScreenState extends State<ChatScreen> {
       PermissionsScreen(permissionService: widget.permissionService, syncService: widget.permissionSyncService),
     ),
     onOpenSettings: _openPhoneSettings,
-    onOpenDocuments: () => _push(DocumentsScreen(documentService: widget.documentService)),
+    onOpenDocuments: () => pickAndOpenDocument(
+      context,
+      documentService: widget.documentService,
+      messageHandoff: widget.messageHandoff,
+      push: _push,
+    ),
     onOpenDocument: (document) =>
         _push(DocumentViewerScreen(document: document, documentService: widget.documentService)),
     onOpenPhoto: (photo) => _push(PhotoViewerScreen(photo: photo, galleryService: widget.galleryService)),
     onChooseRecipient: _session.chooseRecipient,
     onChooseSharedContact: _session.chooseSharedContact,
-    onConfirmAction: (id, document) => _session.confirmAction(id, document: document),
+    onChooseDocument: _session.chooseDocument,
+    // Only after the user confirmed in the dialog the card shows; the user sends it in that app.
+    onShareDocument: shareDocumentWith(widget.messageHandoff),
+    onConfirmAction: _session.confirmAction,
     onCancelAction: _session.cancelAction,
     onShareInstead: _session.shareInstead,
   );
@@ -141,7 +155,9 @@ class _ChatScreenState extends State<ChatScreen> {
     super.dispose();
   }
 
-  void _push(Widget screen) => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => screen));
+  Future<void> _push(Widget screen) async {
+    await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => screen));
+  }
 
   void _send(String text) => _voice.send(text);
 

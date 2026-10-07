@@ -3,11 +3,15 @@ import 'package:flutter/material.dart';
 import '../../../core/widgets/widgets.dart';
 import '../../contacts/services/contact_service.dart';
 import '../../documents/services/document_service.dart';
-import '../../documents/widgets/document_card.dart' show DocumentTypeBadge, documentDateText;
+import '../../documents/widgets/document_share.dart' show ShareDocument;
 import '../../photos/services/photo_gallery_service.dart';
 import '../../photos/widgets/photo_grid.dart' show PhotoThumbnail;
 import '../models/chat_message.dart';
+import '../services/chat_session.dart';
 import 'contact_result_card.dart';
+import 'document_result_cards.dart';
+
+export 'document_result_cards.dart';
 
 /// Sets an action's recipient; returns an error to show, or null on success.
 typedef ChooseRecipient = Future<String?> Function(String actionId, {required String address, String? name});
@@ -15,9 +19,14 @@ typedef ChooseRecipient = Future<String?> Function(String actionId, {required St
 /// Sets whose number an action shares; returns an error to show, or null on success.
 typedef ChooseSharedContact = Future<String?> Function(String actionId, {required String name, required String phone});
 
+/// Sets which document an action shares; returns an error to show, or null on success.
+typedef ChooseDocument = Future<String?> Function(String actionId, DocumentItem document);
+
+
 /// What the result cards need from the screen: the on-device services and navigation.
 class ChatResultContext {
   const ChatResultContext({
+    required this.session,
     required this.documentService,
     required this.galleryService,
     required this.contactService,
@@ -28,11 +37,15 @@ class ChatResultContext {
     required this.onOpenPhoto,
     required this.onChooseRecipient,
     required this.onChooseSharedContact,
+    required this.onChooseDocument,
+    required this.onShareDocument,
     required this.onConfirmAction,
     required this.onCancelAction,
     required this.onShareInstead,
   });
 
+  /// The conversation: documents read for questions, and the document being talked about.
+  final ChatSession session;
   final DocumentService documentService;
   final PhotoGalleryService galleryService;
 
@@ -47,9 +60,11 @@ class ChatResultContext {
   final ValueChanged<PhotoItem> onOpenPhoto;
   final ChooseRecipient onChooseRecipient;
   final ChooseSharedContact onChooseSharedContact;
+  final ChooseDocument onChooseDocument;
+  final ShareDocument onShareDocument;
 
-  /// Confirms an action; [document] is the file picked for a document share.
-  final void Function(String actionId, DocumentItem? document) onConfirmAction;
+  /// Confirms an action. A document share shares the document the server recorded for it.
+  final ValueChanged<String> onConfirmAction;
   final ValueChanged<String> onCancelAction;
 
   /// After WhatsApp turned out to be unavailable: the share sheet instead.
@@ -69,6 +84,12 @@ Widget? toolResultCard(ChatToolEvent event, ChatResultContext context) {
     (ChatToolKind.locationHistory, ChatToolStatus.success) when event.locations.isNotEmpty =>
       LocationResultsCard(places: event.locations),
     (ChatToolKind.documents, ChatToolStatus.deviceLookup) => DocumentResultsCard(query: event.query, results: context),
+    (ChatToolKind.documentText, ChatToolStatus.deviceLookup) when event.requestId != null => DocumentReadCard(
+      key: ValueKey('read-${event.requestId}'),
+      requestId: event.requestId!,
+      query: event.query,
+      results: context,
+    ),
     (ChatToolKind.photos, ChatToolStatus.deviceLookup) => PhotoResultsCard(query: event.query, results: context),
     (ChatToolKind.contacts, ChatToolStatus.deviceLookup) => ContactLookupCard(
       query: event.query,
@@ -192,109 +213,6 @@ class LocationResultsCard extends StatelessWidget {
             ),
         ],
       ),
-    );
-  }
-}
-
-const _ignoredDocumentWords = {'my', 'the', 'a', 'an', 'all', 'file', 'files', 'document', 'documents', 'doc', 'docs'};
-
-/// The documents whose name matches [text] (and [type], e.g. "PDF"): files matching every word
-/// ("math notes") if any, otherwise any of the words. All of them when [text] has no words.
-List<DocumentItem> matchDocuments(List<DocumentItem> documents, {String? text, String? type, int limit = 10}) {
-  final wanted = type?.toLowerCase();
-  final typed = wanted == null ? documents : documents.where((d) => d.type.extension == wanted).toList();
-  final words = (text ?? '')
-      .toLowerCase()
-      .split(RegExp(r'[^a-z0-9]+'))
-      .where((w) => w.length > 1 && !_ignoredDocumentWords.contains(w))
-      .toList();
-  if (words.isEmpty) return typed.take(limit).toList();
-
-  String normalize(String name) => name.toLowerCase().replaceAll(RegExp(r'[_\-.]+'), ' ');
-  var matches = typed.where((d) => words.every(normalize(d.name).contains)).toList();
-  if (matches.isEmpty) matches = typed.where((d) => words.any(normalize(d.name).contains)).toList();
-  return matches.take(limit).toList();
-}
-
-/// Documents on this phone matching what the user asked for. The search runs locally over the
-/// documents the user added (each one granted by the OS file picker); nothing is uploaded.
-class DocumentResultsCard extends StatefulWidget {
-  const DocumentResultsCard({super.key, required this.query, required this.results});
-
-  final ChatLookupQuery query;
-  final ChatResultContext results;
-
-  @override
-  State<DocumentResultsCard> createState() => _DocumentResultsCardState();
-}
-
-class _DocumentResultsCardState extends State<DocumentResultsCard> {
-  late final Future<List<DocumentItem>> _matches = _search();
-
-  Future<List<DocumentItem>> _search() async => matchDocuments(
-    await widget.results.documentService.list(),
-    text: widget.query.text,
-    type: widget.query.type,
-    limit: widget.query.limit ?? 10,
-  );
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return FutureBuilder<List<DocumentItem>>(
-      future: _matches,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done) {
-          return const Padding(padding: EdgeInsets.all(8), child: LinearProgressIndicator());
-        }
-        final documents = snapshot.data ?? const <DocumentItem>[];
-        if (snapshot.hasError || documents.isEmpty) {
-          return InfoBanner(
-            icon: Icons.search_off_rounded,
-            title: snapshot.hasError ? "I couldn't search your documents." : 'No matching documents on this phone.',
-            message: const Text('Child Assist can only see documents you added in Documents.'),
-            actions: [
-              OutlinedButton(onPressed: widget.results.onOpenDocuments, child: const Text('Open Documents')),
-            ],
-          );
-        }
-        return AppCard(
-          padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                documents.length == 1 ? '1 document found' : '${documents.length} documents found',
-                style: theme.textTheme.titleSmall,
-              ),
-              for (final document in documents)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Row(
-                    children: [
-                      DocumentTypeBadge(type: document.type, size: 40),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(document.name, style: theme.textTheme.titleSmall, maxLines: 2, overflow: TextOverflow.ellipsis),
-                            Text(document.type.label, style: theme.textTheme.labelSmall),
-                            Text(documentDateText(context, document).replaceFirst(' ', ': '), style: theme.textTheme.bodySmall),
-                          ],
-                        ),
-                      ),
-                      TextButton(
-                        onPressed: () => widget.results.onOpenDocument(document),
-                        child: const Text('Open'),
-                      ),
-                    ],
-                  ),
-                ),
-            ],
-          ),
-        );
-      },
     );
   }
 }

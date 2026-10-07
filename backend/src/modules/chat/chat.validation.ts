@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { timeZoneSchema, utcOffsetMinutesSchema } from "../../lib/local-dates";
 import { MAX_TITLE_LENGTH } from "./chat.service";
+import { MAX_DOCUMENT_CHARS } from "./documents/document-answer";
 
 /** Longest message a user can send in one turn (also bounds what is sent to Gemini). */
 export const MAX_CHAT_MESSAGE_LENGTH = 4000;
@@ -62,6 +63,51 @@ export const actionSharedContactSchema = z.strictObject({
     .max(120)
     .regex(/^[^\r\n\t<>"]*$/, "Invalid name"),
   phone: z.string({ error: "phone is required" }).trim().min(1).max(32),
+});
+
+/**
+ * The one document the user picked on the phone for a SHARE_DOCUMENT action: the app's opaque id
+ * for it and its display name and type. A path, URI or anything else is rejected outright: the
+ * backend never learns where the file is, and the phone only ever shares from the signed-in
+ * user's own document list.
+ */
+export const actionDocumentSchema = z.strictObject({
+  conversationId: id.optional(),
+  documentId: z
+    .string({ error: "documentId is required" })
+    .trim()
+    .regex(/^doc_[a-z0-9]{4,60}$/, "Invalid document id"),
+  name: z
+    .string({ error: "name is required" })
+    .trim()
+    .min(1)
+    .max(255)
+    // A file's display name: one line, no path separators or markup.
+    .regex(/^[^\u0000-\u001f\u007f/\\<>"]+$/, "Invalid document name"),
+  type: z.enum(["PDF", "DOC", "DOCX", "TXT"]),
+});
+
+/**
+ * The text of the ONE document the phone read for a read request: the app's opaque id for it,
+ * its display name and type, and the text it extracted locally. Paths, URIs, URLs and anything
+ * else are rejected outright.
+ */
+export const documentReadAnswerSchema = z.strictObject({
+  conversationId: id.optional(),
+  documentId: actionDocumentSchema.shape.documentId,
+  name: actionDocumentSchema.shape.name,
+  type: actionDocumentSchema.shape.type,
+  text: z
+    .string({ error: "text is required" })
+    .max(MAX_DOCUMENT_CHARS, `text must be at most ${MAX_DOCUMENT_CHARS} characters`)
+    .refine((t) => t.trim().length > 0, "text must not be empty"),
+  truncated: z.boolean().optional(),
+});
+
+/** Why the phone could not read the document (the server writes the message the user sees). */
+export const documentReadFailSchema = z.strictObject({
+  conversationId: id.optional(),
+  reason: z.enum(["not_found", "unavailable", "unsupported", "no_text", "encrypted", "unreadable", "cancelled"]),
 });
 
 export const actionHandoffSchema = z.strictObject({

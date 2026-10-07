@@ -22,11 +22,13 @@ void main() {
   late FakeBackend backend;
   late FakeTextToSpeech tts;
   late AppServices services;
+  late FakeDocumentPlatform documents;
 
   Future<void> startApp(WidgetTester tester) async {
     backend = FakeBackend();
     tts = FakeTextToSpeech();
-    services = backend.services(FakePermissionService(), textToSpeech: tts);
+    documents = FakeDocumentPlatform();
+    services = backend.services(FakePermissionService(), textToSpeech: tts, documentPlatform: documents);
     await services.authService.restoreSession();
     await tester.pumpWidget(MyApp(services: services));
     await tester.pumpAndSettle();
@@ -200,7 +202,10 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.descendant(of: menu, matching: find.text('Documents')));
     await tester.pumpAndSettle();
-    expect(find.byType(DocumentsScreen), findsOneWidget);
+    // Documents is Android's own document picker; cancelling it leaves the user where they were.
+    expect(documents.pickerShown, 1);
+    expect(find.byType(DocumentsScreen), findsNothing);
+    expect(find.byType(LocationScreen), findsOneWidget);
   });
 
   testWidgets('the menu on a pushed page closes it and opens the chosen tab', (tester) async {

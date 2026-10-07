@@ -37,6 +37,7 @@ model User {
   chatConversations ChatConversation[]
   chatToolCalls     ChatToolCall[]
   chatActions       ChatAction[]
+  documentReads     DocumentReadRequest[]
 
   emailVerificationCodes EmailVerificationCode[]
   passwordResetCodes     PasswordResetCode[]
@@ -193,6 +194,7 @@ model ChatConversation {
   messages  ChatMessage[]
   toolCalls ChatToolCall[]
   actions   ChatAction[]
+  documentReads DocumentReadRequest[]
 
   @@index([userId])
   @@index([updatedAt])
@@ -284,7 +286,13 @@ model ChatAction {
   dataSummary      String?           @map("data_summary") @db.VarChar(300)
   // For SHARE_DOCUMENT: the document name the user mentioned, matched on the phone.
   documentQuery    String?           @map("document_query") @db.VarChar(120)
-  // For SHARE_CONTACT: the contact whose number is shared, kept apart from the recipient. The name
+  // For SHARE_DOCUMENT: the one document the user picked on the phone, set once before Confirm.
+  // The id is the app's opaque id for the document in that user's own on-device list, never a path
+  // or URI; the phone shares exactly this document after Confirm. The name is shown for
+  // confirmation and cleared when the action finishes.
+  documentId       String?           @map("document_id") @db.VarChar(64)
+  documentName     String?           @map("document_name") @db.VarChar(255)
+  documentType     String?           @map("document_type") @db.VarChar(8)  // For SHARE_CONTACT: the contact whose number is shared, kept apart from the recipient. The name
   // the user said is resolved on the phone; the picked name and number then build the message.
   sharedContactQuery String?         @map("shared_contact_query") @db.VarChar(120)
   sharedContactName  String?         @map("shared_contact_name") @db.VarChar(120)
@@ -403,4 +411,45 @@ model NotificationPreference {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("notification_preferences")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Reading one of the user's documents for the assistant ("Python notes me kya hai?").
+//
+// Documents live only on the phone. When the assistant needs one, it opens a short-lived request
+// here; the phone finds the document in that user's own list, checks it is still there, extracts
+// its text locally and posts the text of that one document to this request. The backend answers
+// the question from it and stores only the answer (as a chat message): the document text itself
+// is never stored or logged. The question is cleared when the request finishes.
+
+enum DocumentReadStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+  EXPIRED
+}
+
+model DocumentReadRequest {
+  id             String             @id @default(cuid())
+  userId         String             @map("user_id") @db.Uuid
+  conversationId String             @map("conversation_id")
+  status         DocumentReadStatus @default(PENDING)
+  // The words the user used for the document ("python notes"); null for "this document".
+  documentQuery  String?            @map("document_query") @db.VarChar(120)
+  documentType   String?            @map("document_type") @db.VarChar(8)
+  // What the user wants to know, in their words. Cleared once the request finishes.
+  question       String?            @db.VarChar(500)
+  // The app's opaque id of the document that was read (never a path or URI).
+  documentId     String?            @map("document_id") @db.VarChar(64)
+  expiresAt      DateTime           @map("expires_at")
+  completedAt    DateTime?          @map("completed_at")
+  createdAt      DateTime           @default(now()) @map("created_at")
+
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([expiresAt])
+  @@map("document_read_requests")
 }

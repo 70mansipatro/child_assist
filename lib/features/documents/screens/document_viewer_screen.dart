@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 
 import '../../../core/navigation/app_menu.dart';
 import '../../../core/widgets/widgets.dart';
+import '../../contacts/services/message_handoff.dart';
 import '../../photos/screens/photo_viewer_screen.dart' show fileSizeLabel;
 import '../services/document_service.dart';
 import '../widgets/document_card.dart';
+import '../widgets/document_share.dart';
 
 enum _Phase { checking, ready, unavailable, failed }
 
@@ -15,10 +17,22 @@ enum _Phase { checking, ready, unavailable, failed }
 ///
 /// Pops with `true` if the user removed the document.
 class DocumentViewerScreen extends StatefulWidget {
-  const DocumentViewerScreen({super.key, required this.document, required this.documentService});
+  const DocumentViewerScreen({
+    super.key,
+    required this.document,
+    required this.documentService,
+    this.messageHandoff,
+    this.onShowAll,
+  });
 
   final DocumentItem document;
   final DocumentService documentService;
+
+  /// WhatsApp and the share sheet, for Share and WhatsApp (each asks first). Hidden without it.
+  final MessageHandoff? messageHandoff;
+
+  /// Shows every document Child Assist can see. Hidden without it.
+  final VoidCallback? onShowAll;
 
   @override
   State<DocumentViewerScreen> createState() => _DocumentViewerScreenState();
@@ -143,11 +157,54 @@ class _DocumentViewerScreenState extends State<DocumentViewerScreen> {
 
   void _close() => Navigator.of(context).maybePop();
 
+  /// Share or WhatsApp: asks first, checks the file is still there, then opens the other app.
+  /// The user sends it there; nothing here claims it was sent.
+  Future<void> _share({required bool toWhatsApp}) async {
+    final handoff = widget.messageHandoff;
+    if (handoff == null) return;
+    final outcome = await confirmAndShareDocument(
+      context,
+      document: _document,
+      documentService: _service,
+      share: shareDocumentWith(handoff),
+      toWhatsApp: toWhatsApp,
+    );
+    if (!mounted) return;
+    setState(() {
+      if (outcome.unavailable) _phase = _Phase.unavailable;
+      if (outcome.document != null) _document = outcome.document!;
+    });
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(outcome.message)));
+  }
+
   @override
   Widget build(BuildContext context) {
+    final canShare = widget.messageHandoff != null && _phase == _Phase.ready;
     return Scaffold(
       appBar: AppBar(flexibleSpace: const AppBarGradient(), title: Text(_document.name, overflow: TextOverflow.ellipsis),
-        actions: const [AppMenuButton()],
+        actions: [
+          if (canShare) ...[
+            IconButton(
+              tooltip: 'Share',
+              onPressed: () => _share(toWhatsApp: false),
+              icon: const Icon(Icons.share_rounded),
+            ),
+            IconButton(
+              tooltip: 'Send on WhatsApp',
+              onPressed: () => _share(toWhatsApp: true),
+              icon: const Icon(Icons.chat_rounded),
+            ),
+          ],
+          if (widget.onShowAll != null)
+            IconButton(
+              tooltip: 'Your documents',
+              onPressed: widget.onShowAll,
+              icon: const Icon(Icons.folder_copy_outlined),
+            ),
+          const AppMenuButton(),
+        ],
       ),
       body: SafeArea(
         child: AnimatedSwitcher(

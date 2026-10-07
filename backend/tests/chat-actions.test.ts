@@ -17,6 +17,7 @@ import { setEmailSender } from "../src/lib/email";
 import { prisma } from "../src/lib/prisma";
 import { executeEmailAction, normalizePhone } from "../src/modules/chat/actions/pending-actions";
 import { isValidEmail } from "../src/modules/chat/actions/email.service";
+import { buildInstructions } from "../src/modules/chat/ai/identity";
 import { setChatModels } from "../src/modules/chat/ai/models";
 import { guardReply } from "../src/modules/chat/guardrails/guardrails";
 import { registerVerifiedUser, sentEmails } from "./support/auth";
@@ -524,7 +525,7 @@ describe("whatsapp: prepare, confirm and hand off to the phone", () => {
     const confirmed = await action(userA, pending.id, "confirm", { conversationId });
     assert.equal(confirmed.status, 200, confirmed.raw);
     assert.equal(confirmed.json.action.status, "CONFIRMED");
-    assert.deepEqual(confirmed.json.action.handoff, { phone: "9876543210", message: "I will be late today.", documentQuery: null });
+    assert.deepEqual(confirmed.json.action.handoff, { phone: "9876543210", message: "I will be late today.", documentQuery: null, documentId: null });
     assert.equal(sentEmails.length, 0, "WhatsApp is never sent by the backend");
     assert.equal((await action(userA, pending.id, "confirm")).status, 409, "confirm works exactly once");
 
@@ -566,10 +567,14 @@ describe("whatsapp: prepare, confirm and hand off to the phone", () => {
     assert.match(pending.dataSummary, /^Today's location/);
     assert.match(pending.message, /Patia Market/);
 
+    await setPermission(userA, PermissionType.DOCUMENTS, PermissionStatus.GRANTED);
     const doc = await prepareWhatsApp(userA, { message: undefined, documentName: "math notes" });
     assert.equal(doc.pending.type, "SHARE_DOCUMENT");
     assert.equal(doc.pending.documentQuery, "math notes");
-    assert.equal(doc.pending.summary, 'Share the document "math notes" with Rahul on WhatsApp?');
+    assert.equal(doc.pending.summary, "Do you want to share this document with Rahul on WhatsApp?");
+    // The real file name is only known once the user picks the document on the phone.
+    assert.equal(doc.pending.documentId, null);
+    assert.equal(doc.pending.dataSummary, null);
   });
 
   test("an email action cannot be handed off as WhatsApp", async () => {
@@ -734,7 +739,7 @@ describe("whatsapp: sharing one contact's number with another contact", () => {
 
     const confirmed = await action(userA, pending.id, "confirm", { conversationId });
     assert.equal(confirmed.status, 200, confirmed.raw);
-    assert.deepEqual(confirmed.json.action.handoff, { phone: f.recipientPhone, message: expected, documentQuery: null });
+    assert.deepEqual(confirmed.json.action.handoff, { phone: f.recipientPhone, message: expected, documentQuery: null, documentId: null });
     assert.equal(sentEmails.length, 0);
 
     const again = await action(userA, pending.id, "confirm");
@@ -817,5 +822,286 @@ describe("whatsapp: sharing one contact's number with another contact", () => {
       }
       assert.doesNotMatch(source, /["'`]\+?\d{10,13}["'`]/, `${file} contains a phone-number literal`);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Documents: found on the phone, picked by the user, confirmed, then handed to WhatsApp. The
+// server only ever learns the app's opaque id, the file name and the type of the one document the
+// user picked; every name and number here is generated, so nothing depends on fixed values.
+
+describe("documents: sharing on WhatsApp", () => {
+  const word = () => randomUUID().replace(/[^a-z]/g, "").slice(0, 8) || "kw";
+  const docId = () => `doc_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+  const phone = () => `+91${String(Math.floor(1e9 + Math.random() * 9e9))}`;
+
+  async function prepareDocumentShare(user: TestUser, input: Record<string, unknown> = {}) {
+    await setPermission(user, PermissionType.DOCUMENTS, PermissionStatus.GRANTED);
+    const recipientName = `Contact ${word()}`;
+    setChatModels({
+      chat: toolThen("prepare_whatsapp", { recipientName, documentName: `${word()} pdf`, ...input }, "Please check and confirm."),
+    });
+    const res = await chat(user, { message: `Send the document to ${recipientName} on WhatsApp` });
+    assert.equal(res.status, 200, res.raw);
+    assert.equal(res.json.pendingActions.length, 1, res.raw);
+    return { pending: res.json.pendingActions[0], recipientName };
+  }
+
+  function pickedDocument() {
+    return { documentId: docId(), name: `${word()}_${word()}.pdf`, type: "PDF" };
+  }
+
+  test("search_documents is handed to the phone; the model never sees or invents documents", async () => {
+    await setPermission(userA, PermissionType.DOCUMENTS, PermissionStatus.GRANTED);
+    const kw = word();
+    const model = toolThen("search_documents", { text: kw, type: "PDF" });
+    setChatModels({ chat: model });
+    const res = await chat(userA, { message: `Send me the ${kw} PDF` });
+    assert.equal(res.status, 200, res.raw);
+    assert.deepEqual(res.json.toolEvents, [
+      { kind: "documents", status: "device_lookup", data: { query: { text: kw, type: "PDF", limit: 10 } } },
+    ]);
+    assert.deepEqual(res.json.pendingActions, []);
+    const seen = JSON.stringify(model.seen);
+    assert.match(seen, /never name, list, count or guess documents/);
+    assert.doesNotMatch(seen, /content:\/\/|\/storage\/|\/sdcard\//, "no paths or URIs reach the model");
+  });
+
+  test("Hinglish document requests are searched on the phone; the model gets only the request, never the library", async () => {
+    await setPermission(userA, PermissionType.DOCUMENTS, PermissionStatus.GRANTED);
+    const kw = word();
+    for (const [message, text, type] of [
+      [`Mujhe ${kw} notes PDF do`, `${kw} notes`, "PDF"],
+      [`${kw} ka document bhejo`, kw, undefined],
+      [`Mujhe woh TXT file do`, undefined, "TXT"],
+    ] as const) {
+      const model = toolThen("search_documents", { ...(text ? { text } : {}), ...(type ? { type } : {}) });
+      setChatModels({ chat: model });
+      const res = await chat(userA, { message });
+      assert.equal(res.status, 200, res.raw);
+      assert.deepEqual(res.json.toolEvents, [
+        { kind: "documents", status: "device_lookup", data: { query: { text: text ?? null, type: type ?? null, limit: 10 } } },
+      ]);
+      const seen = JSON.stringify(model.seen);
+      assert.doesNotMatch(seen, /content:\/\/|file:\/\/|\/storage\/|\/sdcard\//);
+      assert.doesNotMatch(seen, /"documents":\[|"sizeBytes"|"addedAt"/, "no document list or metadata reaches the model");
+    }
+    // Every request searches all accessible documents, not just the one opened last.
+    const rules = buildInstructions(new Date(), "UTC");
+    assert.match(rules, /Every document request is a new search over all the documents/);
+    assert.match(rules, /Mujhe <X> notes PDF do/);
+  });
+
+  test("search_documents arguments cannot carry a path, URI or user id", async () => {
+    await setPermission(userA, PermissionType.DOCUMENTS, PermissionStatus.GRANTED);
+    for (const input of [
+      { text: "notes", path: "/sdcard/notes.pdf" },
+      { text: "notes", uri: "content://x/1" },
+      { text: "notes", userId: userB.id },
+      { text: "notes", type: "EXE" },
+    ]) {
+      setChatModels({ chat: toolThen("search_documents", input) });
+      const res = await chat(userA, { message: "Mujhe notes do" });
+      assert.equal(res.status, 200, res.raw);
+      assert.ok(!res.json.toolEvents.some((e: any) => e.status === "device_lookup"), JSON.stringify(input));
+    }
+  });
+
+  test("without Documents permission nothing is searched or prepared", async () => {
+    await setPermission(userA, PermissionType.DOCUMENTS, PermissionStatus.DENIED);
+    setChatModels({ chat: toolThen("prepare_whatsapp", { recipientName: "Someone", documentName: "notes" }) });
+    const res = await chat(userA, { message: "Send my notes to Someone on WhatsApp" });
+    assert.deepEqual(res.json.pendingActions, []);
+    assert.equal(res.json.toolEvents[0].permission, "DOCUMENTS");
+  });
+
+  test("an unnamed document can be shared: the user picks it on the phone", async () => {
+    const { pending } = await prepareDocumentShare(userA, { documentName: undefined, shareDocument: true });
+    assert.equal(pending.type, "SHARE_DOCUMENT");
+    assert.equal(pending.documentQuery, null);
+    assert.equal(pending.documentId, null);
+  });
+
+  test("confirmation is enforced: no document, no recipient, no confirm", async () => {
+    const { pending } = await prepareDocumentShare(userA);
+    await action(userA, pending.id, "recipient", { address: phone() });
+    const res = await action(userA, pending.id, "confirm");
+    assert.equal(res.status, 409, res.raw);
+    assert.equal(res.json.code, "DOCUMENT_REQUIRED");
+    assert.equal((await prisma.chatAction.findUniqueOrThrow({ where: { id: pending.id } })).status, "PENDING");
+
+    const other = await prepareDocumentShare(userA);
+    await action(userA, other.pending.id, "document", pickedDocument());
+    const noRecipient = await action(userA, other.pending.id, "confirm");
+    assert.equal(noRecipient.status, 409);
+    assert.equal(noRecipient.json.code, "RECIPIENT_REQUIRED");
+  });
+
+  test("full flow: picked document and recipient, preview, confirm, handoff of exactly that document", async () => {
+    const { pending, recipientName } = await prepareDocumentShare(userA);
+    const doc = pickedDocument();
+    const to = phone();
+
+    const chosen = await action(userA, pending.id, "document", doc);
+    assert.equal(chosen.status, 200, chosen.raw);
+    assert.equal(chosen.json.action.documentId, doc.documentId);
+    assert.equal(chosen.json.action.documentName, doc.name);
+    assert.equal(chosen.json.action.documentType, "PDF");
+    assert.equal(chosen.json.action.dataSummary, `Document: ${doc.name}`);
+
+    const addressed = await action(userA, pending.id, "recipient", { address: to, name: recipientName });
+    assert.equal(addressed.json.action.summary, `Do you want to share this document with ${recipientName} (${to}) on WhatsApp?`);
+
+    const confirmed = await action(userA, pending.id, "confirm");
+    assert.equal(confirmed.status, 200, confirmed.raw);
+    assert.equal(confirmed.json.action.status, "CONFIRMED");
+    assert.deepEqual(confirmed.json.action.handoff, {
+      phone: to,
+      message: "",
+      documentQuery: pending.documentQuery,
+      documentId: doc.documentId,
+    });
+
+    const opened = await action(userA, pending.id, "handoff", { result: "whatsapp_opened" });
+    assert.equal(opened.json.action.status, "COMPLETED");
+    assert.equal(opened.json.action.outcomeMessage, "WhatsApp opened. Please tap Send to send the document.");
+    assert.doesNotMatch(opened.raw, /\bsent\b|delivered|successfully/i);
+
+    // Stored correctly, and what was only kept for confirmation is cleared.
+    const row = await prisma.chatAction.findUniqueOrThrow({ where: { id: pending.id } });
+    assert.equal(row.status, "COMPLETED");
+    assert.equal(row.userId, userA.id);
+    assert.equal(row.documentId, doc.documentId);
+    assert.equal(row.documentName, null);
+    assert.equal(row.recipientAddress, null);
+    assert.ok(row.confirmedAt && row.completedAt);
+  });
+
+  test("an action can be confirmed and handed off only once", async () => {
+    const { pending } = await prepareDocumentShare(userA);
+    await action(userA, pending.id, "document", pickedDocument());
+    await action(userA, pending.id, "recipient", { address: phone() });
+    assert.equal((await action(userA, pending.id, "confirm")).status, 200);
+    const again = await action(userA, pending.id, "confirm");
+    assert.equal(again.status, 409);
+    assert.equal(again.json.code, "ACTION_ALREADY_HANDLED");
+    assert.equal((await action(userA, pending.id, "handoff", { result: "whatsapp_opened" })).status, 200);
+    assert.equal((await action(userA, pending.id, "handoff", { result: "whatsapp_opened" })).status, 409);
+  });
+
+  test("the document can be chosen once, and only for a document share", async () => {
+    const { pending } = await prepareDocumentShare(userA);
+    assert.equal((await action(userA, pending.id, "document", pickedDocument())).status, 200);
+    const twice = await action(userA, pending.id, "document", pickedDocument());
+    assert.equal(twice.status, 409);
+    assert.equal(twice.json.code, "DOCUMENT_ALREADY_SET");
+
+    const { pending: email } = await prepareEmail(userA);
+    assert.equal((await action(userA, email.id, "document", pickedDocument())).status, 404, "never attached to email");
+    const whatsapp = await prepareWhatsApp(userA);
+    assert.equal((await action(userA, whatsapp.pending.id, "document", pickedDocument())).status, 404);
+  });
+
+  test("invalid documents, paths, URIs and unknown fields are rejected", async () => {
+    const { pending } = await prepareDocumentShare(userA);
+    const good = pickedDocument();
+    for (const bad of [
+      { ...good, documentId: "/sdcard/Download/secret.pdf" },
+      { ...good, documentId: "content://com.android.providers.downloads/document/42" },
+      { ...good, documentId: "../../etc/passwd" },
+      { ...good, documentId: "" },
+      { ...good, name: "../../secret.pdf" },
+      { ...good, name: "folder/file.pdf" },
+      { ...good, name: "line\nbreak.pdf" },
+      { ...good, name: "" },
+      { ...good, type: "EXE" },
+      { ...good, reference: "content://x/1" },
+      { ...good, path: "/storage/emulated/0/x.pdf" },
+      { ...good, userId: userB.id },
+      { documentId: good.documentId },
+    ]) {
+      const res = await action(userA, pending.id, "document", bad);
+      assert.equal(res.status, 400, `${JSON.stringify(bad)} -> ${res.raw}`);
+    }
+    const row = await prisma.chatAction.findUniqueOrThrow({ where: { id: pending.id } });
+    assert.equal(row.documentId, null, "nothing was stored");
+  });
+
+  test("another user can never choose, confirm, cancel or hand off the document action", async () => {
+    const { pending } = await prepareDocumentShare(userA);
+    const anonymous = await call("POST", `/api/chat/actions/${pending.id}/document`, { body: pickedDocument() });
+    assert.equal(anonymous.status, 401);
+    assert.equal((await action(userB, pending.id, "document", pickedDocument())).status, 404);
+    await action(userA, pending.id, "document", pickedDocument());
+    await action(userA, pending.id, "recipient", { address: phone() });
+    for (const verb of ["confirm", "cancel"]) assert.equal((await action(userB, pending.id, verb)).status, 404, verb);
+    await action(userA, pending.id, "confirm");
+    assert.equal((await action(userB, pending.id, "handoff", { result: "whatsapp_opened" })).status, 404);
+    assert.equal((await prisma.chatAction.findUniqueOrThrow({ where: { id: pending.id } })).status, "CONFIRMED");
+  });
+
+  test("expired confirmations are rejected", async () => {
+    const { pending } = await prepareDocumentShare(userA);
+    await prisma.chatAction.update({ where: { id: pending.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+    const late = await action(userA, pending.id, "document", pickedDocument());
+    assert.equal(late.status, 410, late.raw);
+    assert.equal(late.json.code, "ACTION_EXPIRED");
+
+    const other = await prepareDocumentShare(userA);
+    await action(userA, other.pending.id, "document", pickedDocument());
+    await action(userA, other.pending.id, "recipient", { address: phone() });
+    await prisma.chatAction.update({ where: { id: other.pending.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+    assert.equal((await action(userA, other.pending.id, "confirm")).status, 410);
+    assert.equal((await prisma.chatAction.findUniqueOrThrow({ where: { id: other.pending.id } })).status, "EXPIRED");
+  });
+
+  test("Cancel shares nothing and says so", async () => {
+    const { pending } = await prepareDocumentShare(userA);
+    await action(userA, pending.id, "document", pickedDocument());
+    const res = await action(userA, pending.id, "cancel");
+    assert.equal(res.json.action.status, "CANCELLED");
+    assert.equal(res.json.action.outcomeMessage, "Okay, I didn't share the document.");
+    assert.equal((await action(userA, pending.id, "confirm")).status, 409);
+    const row = await prisma.chatAction.findUniqueOrThrow({ where: { id: pending.id } });
+    assert.equal(row.documentName, null);
+  });
+
+  test("a document is never emailed, whatever the model asks", async () => {
+    for (const input of [{ documentName: "notes" }, { shareDocument: true }]) {
+      const model = toolThen("prepare_email", { recipientName: "Someone", ...input });
+      setChatModels({ chat: model });
+      const res = await chat(userA, { message: "Send the notes to Someone's email" });
+      assert.deepEqual(res.json.pendingActions, []);
+      const seen = JSON.stringify(model.seen);
+      assert.match(seen, /NOT_SUPPORTED/);
+      assert.match(seen, /nothing was sent/);
+    }
+    assert.equal(sentEmails.length, 0);
+  });
+
+  test("document names and phone numbers are never logged", async () => {
+    const doc = pickedDocument();
+    const to = phone();
+    const logged: string[] = [];
+    const originals = { log: console.log, info: console.info, warn: console.warn, error: console.error };
+    for (const level of ["log", "info", "warn", "error"] as const) {
+      console[level] = (...args: unknown[]) => {
+        logged.push(args.map(String).join(" "));
+      };
+    }
+    try {
+      const { pending } = await prepareDocumentShare(userA);
+      await action(userA, pending.id, "document", doc);
+      await action(userA, pending.id, "recipient", { address: to });
+      await action(userA, pending.id, "confirm");
+      await action(userA, pending.id, "handoff", { result: "whatsapp_opened" });
+      await action(userA, pending.id, "document", { ...doc, documentId: "/sdcard/x" });
+    } finally {
+      Object.assign(console, originals);
+    }
+    const all = logged.join("\n");
+    assert.doesNotMatch(all, new RegExp(doc.name.replace(/[.]/g, "\\.")));
+    assert.doesNotMatch(all, new RegExp(doc.documentId));
+    assert.doesNotMatch(all, new RegExp(to.replace("+", "\\+")));
   });
 });

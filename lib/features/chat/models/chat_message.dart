@@ -159,11 +159,15 @@ class ChatToolEvent {
     this.permission,
     this.locations = const [],
     this.query = const ChatLookupQuery(),
+    this.requestId,
   });
 
   final ChatToolKind kind;
   final ChatToolStatus status;
   final ChatPermission? permission;
+
+  /// For reading a document on this phone: the server's request to answer with its text.
+  final String? requestId;
 
   /// For a successful location-history lookup: the user's own saved places.
   final List<ChatPlace> locations;
@@ -184,6 +188,7 @@ class ChatToolEvent {
       query: data['query'] is Map<String, dynamic>
           ? ChatLookupQuery.fromJson(data['query'] as Map<String, dynamic>)
           : const ChatLookupQuery(),
+      requestId: data['requestId'] is String ? data['requestId'] as String : null,
     );
   }
 }
@@ -325,17 +330,25 @@ enum ActionChannel {
 
 /// What the phone opens after a WhatsApp action was confirmed.
 class ActionHandoff {
-  const ActionHandoff({required this.phone, required this.message, this.documentQuery});
+  const ActionHandoff({required this.phone, required this.message, this.documentQuery, this.documentId});
 
   final String phone;
   final String message;
   final String? documentQuery;
 
+  /// For a document share: the document the user confirmed, which is exactly what is shared.
+  final String? documentId;
+
   static ActionHandoff? tryParse(Object? json) {
     if (json is! Map<String, dynamic>) return null;
     final phone = json['phone'], message = json['message'];
     if (phone is! String || message is! String) return null;
-    return ActionHandoff(phone: phone, message: message, documentQuery: json['documentQuery'] as String?);
+    return ActionHandoff(
+      phone: phone,
+      message: message,
+      documentQuery: json['documentQuery'] as String?,
+      documentId: json['documentId'] as String?,
+    );
   }
 }
 
@@ -355,6 +368,9 @@ class PendingAction {
     this.message,
     this.dataSummary,
     this.documentQuery,
+    this.documentId,
+    this.documentName,
+    this.documentType,
     this.sharedContactQuery,
     this.sharedContactName,
     this.sharedContactPhone,
@@ -388,6 +404,12 @@ class PendingAction {
   /// For a document share: words from the document's name, matched on this phone.
   final String? documentQuery;
 
+  /// For a document share: the document the user picked on this phone (its id in the user's own
+  /// document list, its file name and type label). Null until picked.
+  final String? documentId;
+  final String? documentName;
+  final String? documentType;
+
   /// For sharing a contact's number: the contact whose number is shared (never the recipient),
   /// as the user named it. Found on this phone; the user picks the contact and the number.
   final String? sharedContactQuery;
@@ -406,6 +428,9 @@ class PendingAction {
   bool get isWhatsApp => channel == ActionChannel.whatsApp;
   bool get isDocumentShare => type == 'SHARE_DOCUMENT';
   bool get isContactShare => type == 'SHARE_CONTACT';
+
+  /// The document to share still has to be picked on the phone.
+  bool get needsDocument => isDocumentShare && documentId == null;
 
   /// The contact whose number is shared still has to be picked on the phone.
   bool get needsSharedContact => isContactShare && sharedContactPhone == null;
@@ -428,6 +453,9 @@ class PendingAction {
     message: message,
     dataSummary: dataSummary,
     documentQuery: documentQuery,
+    documentId: documentId,
+    documentName: documentName,
+    documentType: documentType,
     sharedContactQuery: sharedContactQuery,
     sharedContactName: sharedContactName,
     sharedContactPhone: sharedContactPhone,
@@ -451,6 +479,9 @@ class PendingAction {
     message: server.message,
     dataSummary: server.dataSummary,
     documentQuery: server.documentQuery,
+    documentId: server.documentId,
+    documentName: server.documentName,
+    documentType: server.documentType,
     sharedContactQuery: server.sharedContactQuery,
     sharedContactName: server.sharedContactName,
     sharedContactPhone: server.sharedContactPhone,
@@ -476,6 +507,9 @@ class PendingAction {
       message: text('message'),
       dataSummary: text('dataSummary'),
       documentQuery: text('documentQuery'),
+      documentId: text('documentId'),
+      documentName: text('documentName'),
+      documentType: text('documentType'),
       sharedContactQuery: text('sharedContactQuery'),
       sharedContactName: text('sharedContactName'),
       sharedContactPhone: text('sharedContactPhone'),

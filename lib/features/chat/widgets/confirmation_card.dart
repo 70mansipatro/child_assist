@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../../../core/widgets/widgets.dart';
 import '../../contacts/models/contact_item.dart';
 import '../../contacts/services/contact_service.dart';
-import '../../documents/services/document_service.dart';
 import '../models/chat_message.dart';
 import 'contact_result_card.dart';
 import 'tool_result_cards.dart';
@@ -27,21 +26,9 @@ class ActionConfirmationCard extends StatefulWidget {
 }
 
 class _ActionConfirmationCardState extends State<ActionConfirmationCard> {
-  Future<List<DocumentItem>>? _documents;
-  DocumentItem? _document;
   bool _showFullMessage = false;
 
   PendingAction get _action => widget.action;
-
-  @override
-  void initState() {
-    super.initState();
-    if (_action.isOpen && _action.isDocumentShare) {
-      _documents = widget.results.documentService.list().then(
-        (all) => matchDocuments(all, text: _action.documentQuery, limit: 5),
-      );
-    }
-  }
 
   void _cancel() => widget.results.onCancelAction(_action.id);
 
@@ -60,7 +47,11 @@ class _ActionConfirmationCardState extends State<ActionConfirmationCard> {
           tone: BannerTone.warning,
           icon: Icons.chat_bubble_outline_rounded,
           title: "WhatsApp isn't available on this device.",
-          message: const Text('You can share the message another way instead. Nothing has been sent.'),
+          message: Text(
+            action.isDocumentShare
+                ? 'You can share the document another way instead. Nothing has been shared.'
+                : 'You can share the message another way instead. Nothing has been sent.',
+          ),
           actions: [
             OutlinedButton(onPressed: _cancel, child: const Text('Cancel')),
             FilledButton(onPressed: () => widget.results.onShareInstead(action.id), child: const Text('Share instead')),
@@ -103,6 +94,20 @@ class _ActionConfirmationCardState extends State<ActionConfirmationCard> {
   List<Widget> _body(BuildContext context) {
     final action = _action;
     final theme = Theme.of(context);
+    // A document share: first the document, among the user's own documents on this phone.
+    if (action.isOpen && action.needsDocument) {
+      return [
+        Text('Document', style: theme.textTheme.labelMedium),
+        const SizedBox(height: 4),
+        ActionDocumentPicker(
+          key: ValueKey('document-${action.id}'),
+          query: action.documentQuery,
+          results: widget.results,
+          onCancel: _cancel,
+          onPick: (document) => widget.results.onChooseDocument(action.id, document),
+        ),
+      ];
+    }
     if (action.isOpen && action.needsSharedContact) {
       final query = action.sharedContactQuery ?? '';
       return [
@@ -122,6 +127,11 @@ class _ActionConfirmationCardState extends State<ActionConfirmationCard> {
     if (action.isOpen && action.needsRecipient && action.contactQuery != null) {
       final email = action.recipientField == ContactField.email;
       return [
+        if (action.isDocumentShare) ...[
+          _Field(label: 'Document', value: _documentLabel(action)),
+          Text('Recipient', style: theme.textTheme.labelMedium),
+          const SizedBox(height: 4),
+        ],
         if (action.isContactShare) ...[
           Text('Send to', style: theme.textTheme.labelMedium),
           const SizedBox(height: 4),
@@ -176,12 +186,17 @@ class _ActionConfirmationCardState extends State<ActionConfirmationCard> {
     final message = action.message;
     final long = message != null && (message.length > 400 || '\n'.allMatches(message).length > 8);
 
+    final document = action.isDocumentShare;
     return [
-      _Field(label: 'To', value: to),
+      if (document) ...[
+        _Field(label: 'Document', value: _documentLabel(action), highlight: true),
+        _Field(label: 'Recipient', value: to),
+        const _Field(label: 'Method', value: 'WhatsApp'),
+      ] else
+        _Field(label: 'To', value: to),
       if (action.subject != null) _Field(label: 'Subject', value: action.subject!),
-      if (action.dataSummary != null && !action.isDocumentShare)
+      if (action.dataSummary != null && !document)
         _Field(label: action.isWhatsApp ? 'Information' : 'Data', value: action.dataSummary!, highlight: true),
-      if (action.isDocumentShare) _documentField(context),
       if (message != null && message.isNotEmpty) ...[
         _Field(label: 'Message', value: message, maxLines: long && !_showFullMessage ? 8 : null),
         if (long)
@@ -199,6 +214,7 @@ class _ActionConfirmationCardState extends State<ActionConfirmationCard> {
           PendingActionState.confirming => action.isWhatsApp ? 'Getting WhatsApp ready...' : 'Sending...',
           PendingActionState.handingOff => 'Opening WhatsApp...',
           PendingActionState.cancelling => 'Cancelling...',
+          _ when document => 'WhatsApp will open with this document ready. You tap Send in WhatsApp.',
           _ =>
             action.isWhatsApp
                 ? 'WhatsApp will open with this ready. You send it from WhatsApp.'
@@ -214,64 +230,20 @@ class _ActionConfirmationCardState extends State<ActionConfirmationCard> {
         children: [
           OutlinedButton(onPressed: busy ? null : _cancel, child: const Text('Cancel')),
           FilledButton(
-            onPressed: busy || (action.isDocumentShare && _document == null)
-                ? null
-                : () => widget.results.onConfirmAction(action.id, _document),
+            onPressed: busy ? null : () => widget.results.onConfirmAction(action.id),
             child: action.state == PendingActionState.confirming || action.state == PendingActionState.handingOff
                 ? ButtonSpinner(size: 16, color: theme.colorScheme.onPrimary)
-                : Text(action.isWhatsApp ? 'Continue to WhatsApp' : 'Confirm & Send'),
+                : Text(document ? 'Confirm' : action.isWhatsApp ? 'Continue to WhatsApp' : 'Confirm & Send'),
           ),
         ],
       ),
     ];
   }
 
-  /// The document to share, found among the documents the user added on this phone.
-  Widget _documentField(BuildContext context) {
-    final documents = _documents;
-    if (documents == null) return _Field(label: 'Document', value: _action.documentQuery ?? 'Document');
-    return FutureBuilder<List<DocumentItem>>(
-      future: documents,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done) return const LinearProgressIndicator();
-        final matches = snapshot.data ?? const <DocumentItem>[];
-        if (matches.isEmpty) {
-          return _Field(
-            label: 'Document',
-            value: 'No document matching "${_action.documentQuery}" on this phone. Add it in Documents first.',
-          );
-        }
-        if (matches.length == 1 && _document == null) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted && _document == null) setState(() => _document = matches.single);
-          });
-        }
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Document', style: Theme.of(context).textTheme.labelMedium),
-            RadioGroup<String>(
-              groupValue: _document?.id,
-              onChanged: _action.isOpen
-                  ? (id) => setState(() => _document = matches.firstWhere((d) => d.id == id))
-                  : (_) {},
-              child: Column(
-                children: [
-                  for (final doc in matches)
-                    RadioListTile<String>(
-                      value: doc.id,
-                      dense: true,
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(doc.name, maxLines: 2, overflow: TextOverflow.ellipsis),
-                      subtitle: Text(doc.type.label),
-                    ),
-                ],
-              ),
-            ),
-          ],
-        );
-      },
-    );
+  /// "Python_Project.pdf (PDF)", as the server recorded the document the user picked.
+  static String _documentLabel(PendingAction action) {
+    final name = action.documentName ?? action.documentQuery ?? 'Document';
+    return action.documentType == null ? name : '$name (${action.documentType})';
   }
 }
 

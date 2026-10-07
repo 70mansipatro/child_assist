@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:child_assist/features/auth/screens/login_screen.dart';
+import 'package:child_assist/app_services.dart';
 import 'package:child_assist/features/auth/screens/verify_email_screen.dart';
+import 'package:child_assist/features/documents/screens/documents_screen.dart';
 
 import 'fakes.dart';
 
@@ -74,6 +78,15 @@ Future<void> logOut(WidgetTester tester) async {
 
 /// Opens a Dashboard feature card (Photos, Documents, Permissions, Notifications), or switches
 /// to the tab when [label] names one.
+/// Shows the list of every document Child Assist can see. In the app it is reached from a picked
+/// document's viewer ("Your documents"), because Documents on Home opens the system picker.
+Future<void> openDocumentsList(WidgetTester tester, AppServices services) async {
+  unawaited(tester.state<NavigatorState>(find.byType(Navigator).first).push(MaterialPageRoute<void>(
+    builder: (_) => DocumentsScreen(documentService: services.documentService, messageHandoff: services.messageHandoff),
+  )));
+  await tester.pumpAndSettle();
+}
+
 Future<void> openFromHome(WidgetTester tester, String label) async {
   if (const ['Dashboard', 'Chat', 'Location', 'Profile'].contains(label)) return openTab(tester, label);
   await openTab(tester, 'Dashboard');
