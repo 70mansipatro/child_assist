@@ -1,3 +1,5 @@
+import 'package:flutter/material.dart';
+
 import 'core/api/api_client.dart';
 import 'core/permissions/permission_service.dart';
 import 'features/auth/data/auth_api.dart';
@@ -98,4 +100,7 @@ class AppServices {
 
   /// Reads chat replies aloud when "Voice replies" is on.
   final TextToSpeechService textToSpeech;
+
+  /// Light, dark or follow the device. Chosen in App Settings; kept for this app session only.
+  final ValueNotifier<ThemeMode> themeMode = ValueNotifier(ThemeMode.system);
 }

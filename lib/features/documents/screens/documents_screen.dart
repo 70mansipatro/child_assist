@@ -176,6 +176,7 @@ class _DocumentsScreenState extends State<DocumentsScreen> {
     final documents = _documents;
     return Scaffold(
       appBar: AppBar(
+        flexibleSpace: const AppBarGradient(),
         title: const Text('Documents'),
         actions: [
           IconButton(

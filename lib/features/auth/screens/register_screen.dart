@@ -66,7 +66,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     final theme = Theme.of(context);
     return Scaffold(
       extendBodyBehindAppBar: true,
-      appBar: AppBar(foregroundColor: Colors.white),
+      appBar: AppBar(backgroundColor: Colors.transparent, foregroundColor: Colors.white),
       body: AuthBackdrop(
         headerHeight: 250,
         top: kToolbarHeight,

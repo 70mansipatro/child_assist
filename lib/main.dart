@@ -5,7 +5,7 @@ import 'app_services.dart';
 import 'core/widgets/widgets.dart';
 import 'features/auth/screens/login_screen.dart';
 import 'features/auth/services/auth_service.dart';
-import 'features/home/home_screen.dart';
+import 'features/home/app_shell.dart';
 import 'features/permissions/screens/permission_onboarding_screen.dart';
 import 'features/permissions/services/permission_onboarding_service.dart';
 
@@ -47,7 +47,7 @@ class _MyAppState extends State<MyApp> {
     super.dispose();
   }
 
-  // On sign-in or sign-out, close any pushed screens (Profile, Permissions, Register, dialogs)
+  // On sign-in or sign-out, close any pushed screens (Permissions, Settings, Register, dialogs)
   // so the root shows the right screen and nothing from the previous session stays visible.
   void _onAuthChanged() {
     final status = widget.services.authService.status;
@@ -58,20 +58,23 @@ class _MyAppState extends State<MyApp> {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      navigatorKey: _navigatorKey,
-      title: 'Child Assist',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.light,
-      darkTheme: AppTheme.dark,
-      themeMode: ThemeMode.system,
-      home: AuthGate(services: widget.services),
+    return ValueListenableBuilder(
+      valueListenable: widget.services.themeMode,
+      builder: (context, themeMode, _) => MaterialApp(
+        navigatorKey: _navigatorKey,
+        title: 'Child Assist',
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.light,
+        darkTheme: AppTheme.dark,
+        themeMode: themeMode,
+        home: AuthGate(services: widget.services),
+      ),
     );
   }
 }
 
 /// Shows Login when signed out. When signed in, shows the first-time permission walkthrough
-/// if the backend says it has not been completed, otherwise Home. This is the only place that
+/// if the backend says it has not been completed, otherwise the main app. This is the only place that
 /// decides; login, registration and session restore all arrive here.
 class AuthGate extends StatelessWidget {
   const AuthGate({super.key, required this.services});
@@ -86,7 +89,7 @@ class AuthGate extends StatelessWidget {
     final onboarding = services.permissionOnboardingService;
     return ListenableBuilder(
       listenable: Listenable.merge([authService, onboarding]),
-      // Cross-fade between Login, the walkthrough and Home instead of cutting.
+      // Cross-fade between Login, the walkthrough and the app instead of cutting.
       builder: (context, _) => AnimatedSwitcher(
         duration: const Duration(milliseconds: 380),
         switchInCurve: Curves.easeOutCubic,
@@ -119,7 +122,7 @@ class AuthGate extends StatelessWidget {
             syncService: services.permissionSyncService,
             authService: authService,
           ),
-          OnboardingGate.completed => HomeScreen(key: ValueKey('home-${user.id}'), services: services),
+          OnboardingGate.completed => AppShell(key: ValueKey('home-${user.id}'), services: services),
         };
     }
   }

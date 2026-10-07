@@ -305,12 +305,11 @@ void main() {
     Finder currentCard(String text) => inCurrentCard(find.text(text));
     Finder historyItem(String id) => find.byKey(ValueKey('location-$id'));
 
-    testWidgets('Home shows the Location quick action', (tester) async {
+    testWidgets('Location is a bottom-navigation tab', (tester) async {
       await startApp(tester);
-      expect(find.text('Quick Actions'), findsOneWidget);
-      expect(find.text('View current place'), findsOneWidget);
-      expect(find.text('Profile'), findsOneWidget);
-      expect(find.text('Permissions'), findsOneWidget);
+      expect(dashboard(), findsOneWidget);
+      expect(find.descendant(of: find.byType(NavigationBar), matching: find.text('Location')), findsOneWidget);
+      expect(find.byType(LocationScreen), findsNothing, reason: 'tabs are built when first opened');
     });
 
     testWidgets('opening the screen does not ask for permission', (tester) async {
@@ -523,8 +522,6 @@ void main() {
       await startApp(tester);
       await openFromHome(tester, 'Location');
       await tapGetLocation(tester);
-      await tester.pageBack();
-      await tester.pumpAndSettle();
       await logOut(tester);
 
       await logIn(tester, 'ravi@example.com');
@@ -536,8 +533,6 @@ void main() {
       geocoder.placemark = const Placemark(name: 'Connaught Place', locality: 'New Delhi', country: 'India');
       await tapGetLocation(tester);
       expect(find.descendant(of: historyItem('loc2'), matching: find.text('Connaught Place')), findsOneWidget);
-      await tester.pageBack();
-      await tester.pumpAndSettle();
       await logOut(tester);
 
       await logIn(tester, 'mansi@example.com');

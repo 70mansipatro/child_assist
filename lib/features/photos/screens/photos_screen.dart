@@ -231,6 +231,7 @@ class _PhotosScreenState extends State<PhotosScreen> {
     final usable = _permission?.isUsable ?? false;
     return Scaffold(
       appBar: AppBar(
+        flexibleSpace: const AppBarGradient(),
         title: const Text('Photos'),
         actions: [
           IconButton(

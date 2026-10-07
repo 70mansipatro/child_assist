@@ -11,14 +11,27 @@ Future<void> logIn(WidgetTester tester, String email) async {
   await tester.pumpAndSettle();
 }
 
-Future<void> logOut(WidgetTester tester) async {
-  await tester.tap(find.text('Logout'));
+/// The Dashboard greeting; present only while the Dashboard tab is showing.
+Finder dashboard() => find.text("Hi, I'm Child Assist! 👋");
+
+/// Switches to a bottom-navigation tab: Dashboard, Chat, Location or Profile.
+Future<void> openTab(WidgetTester tester, String label) async {
+  await tester.tap(find.descendant(of: find.byType(NavigationBar), matching: find.text(label)));
   await tester.pumpAndSettle();
 }
 
+/// Logs out from the Profile tab.
+Future<void> logOut(WidgetTester tester) async {
+  await openTab(tester, 'Profile');
+  await tapVisible(tester, find.text('Logout'));
+}
+
+/// Opens a Dashboard feature card (Photos, Documents, Permissions, Notifications), or switches
+/// to the tab when [label] names one.
 Future<void> openFromHome(WidgetTester tester, String label) async {
-  await tester.tap(find.text(label));
-  await tester.pumpAndSettle();
+  if (const ['Dashboard', 'Chat', 'Location', 'Profile'].contains(label)) return openTab(tester, label);
+  await openTab(tester, 'Dashboard');
+  await tapVisible(tester, find.text(label));
 }
 
 /// Scrolls [finder] into view (building lazily-built list items if needed) and taps it.

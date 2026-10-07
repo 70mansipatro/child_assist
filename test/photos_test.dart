@@ -289,7 +289,7 @@ void main() {
 
     await tester.pageBack();
     await tester.pumpAndSettle();
-    expect(find.text('Quick Actions'), findsOneWidget);
+    expect(dashboard(), findsOneWidget);
   });
 
   testWidgets('viewer shows only metadata the device reported', (tester) async {

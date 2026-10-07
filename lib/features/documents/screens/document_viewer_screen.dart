@@ -145,7 +145,7 @@ class _DocumentViewerScreenState extends State<DocumentViewerScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(_document.name, overflow: TextOverflow.ellipsis)),
+      appBar: AppBar(flexibleSpace: const AppBarGradient(), title: Text(_document.name, overflow: TextOverflow.ellipsis)),
       body: SafeArea(
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 300),

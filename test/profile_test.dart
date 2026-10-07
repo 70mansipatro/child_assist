@@ -18,7 +18,7 @@ void main() {
     return backend;
   }
 
-  testWidgets('view and edit profile name; Home greeting follows', (tester) async {
+  testWidgets('view and edit profile name; the signed-in user follows', (tester) async {
     final backend = await startApp(tester);
     await logIn(tester, 'mansi@example.com');
     await openFromHome(tester, 'Profile');
@@ -27,7 +27,7 @@ void main() {
     expect(find.text('mansi@example.com'), findsOneWidget);
     expect(find.byIcon(Icons.person), findsOneWidget, reason: 'placeholder when no image');
 
-    await tester.tap(find.text('Edit Profile'));
+    await tester.tap(find.text('Account'));
     await tester.pumpAndSettle();
     await tester.enterText(find.widgetWithText(TextFormField, 'Name'), '  Mansi K  ');
     await tester.tap(find.text('Save'));
@@ -37,9 +37,8 @@ void main() {
     expect(find.text('Profile saved'), findsOneWidget);
     expect(backend.users['u1']!['name'], 'Mansi K');
 
-    await tester.pageBack();
-    await tester.pumpAndSettle();
-    expect(find.text('Welcome, Mansi K'), findsOneWidget);
+    final services = tester.widget<MyApp>(find.byType(MyApp)).services;
+    expect(services.authService.currentUser?.name, 'Mansi K');
   });
 
   testWidgets('empty name is rejected before calling the server', (tester) async {
@@ -47,7 +46,7 @@ void main() {
     await logIn(tester, 'mansi@example.com');
     await openFromHome(tester, 'Profile');
 
-    await tester.tap(find.text('Edit Profile'));
+    await tester.tap(find.text('Account'));
     await tester.pumpAndSettle();
     await tester.enterText(find.widgetWithText(TextFormField, 'Name'), '   ');
     await tester.tap(find.text('Save'));
@@ -72,8 +71,6 @@ void main() {
     await logIn(tester, 'mansi@example.com');
     await openFromHome(tester, 'Profile');
     expect(find.text('mansi@example.com'), findsOneWidget);
-    await tester.pageBack();
-    await tester.pumpAndSettle();
     await logOut(tester);
 
     await logIn(tester, 'ravi@example.com');

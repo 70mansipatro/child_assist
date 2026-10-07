@@ -169,6 +169,7 @@ class _PermissionsScreenState extends State<PermissionsScreen> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
+        flexibleSpace: const AppBarGradient(),
         title: const Text('Permissions'),
         actions: [
           IconButton(

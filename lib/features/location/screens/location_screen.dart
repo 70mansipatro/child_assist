@@ -200,7 +200,7 @@ class _LocationScreenState extends State<LocationScreen> {
     final theme = Theme.of(context);
     final busy = _locating || _clearing;
     return Scaffold(
-      appBar: AppBar(title: const Text('My Location')),
+      appBar: AppBar(flexibleSpace: const AppBarGradient(), title: const Text('My Location')),
       body: SafeArea(
         child: ListenableBuilder(
           listenable: widget.historyService,

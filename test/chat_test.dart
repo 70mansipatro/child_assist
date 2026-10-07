@@ -37,7 +37,7 @@ void main() {
   }
 
   Future<void> openChat(WidgetTester tester) async {
-    await tapVisible(tester, find.text('Chat with your assistant'));
+    await openTab(tester, 'Chat');
     expect(find.byType(ChatScreen), findsOneWidget);
   }
 
@@ -54,11 +54,18 @@ void main() {
     expect(find.byType(ChatHistoryScreen), findsOneWidget);
   }
 
-  testWidgets('Home keeps every feature and adds Child Assist', (tester) async {
+  testWidgets('the bottom bar has exactly Dashboard, Chat, Location and Profile', (tester) async {
     await startApp(tester);
-    for (final label in ['Location', 'Photos', 'Profile', 'Permissions', 'Documents', 'Chat with your assistant']) {
+    final bar = find.byType(NavigationBar);
+    expect(bar, findsOneWidget);
+    expect(find.descendant(of: bar, matching: find.byType(NavigationDestination)), findsNWidgets(4));
+    for (final label in ['Dashboard', 'Chat', 'Location', 'Profile']) {
+      expect(find.descendant(of: bar, matching: find.text(label)), findsOneWidget, reason: label);
+    }
+    for (final label in ['Photos', 'Documents', 'Permissions', 'Notifications']) {
       await tester.scrollUntilVisible(find.text(label), 100, scrollable: find.byType(Scrollable).first);
       expect(find.text(label), findsOneWidget, reason: label);
+      expect(find.descendant(of: bar, matching: find.text(label)), findsNothing, reason: label);
     }
   });
 
@@ -69,8 +76,8 @@ void main() {
     expect(find.text('Your personal assistant'), findsOneWidget);
     expect(find.byTooltip('New Chat'), findsOneWidget);
     expect(find.byTooltip('History'), findsOneWidget);
-    expect(find.text("Hi! I'm Child Assist."), findsOneWidget);
-    expect(find.textContaining('location history, photos, documents'), findsOneWidget);
+    expect(find.text('Hey! 👋'), findsOneWidget);
+    expect(find.text('How can I help you today?'), findsOneWidget);
     for (final prompt in ChatScreen.suggestions) {
       expect(find.text(prompt), findsOneWidget);
     }
@@ -85,7 +92,7 @@ void main() {
 
     expect(find.text('What is your name?'), findsOneWidget);
     expect(find.text('My name is Child Assist.'), findsOneWidget);
-    expect(find.text("Hi! I'm Child Assist."), findsNothing);
+    expect(find.text('Hey! 👋'), findsNothing);
 
     final body = backend.chatRequests.single;
     expect(body['message'], 'What is your name?');
@@ -158,7 +165,7 @@ void main() {
 
     await tester.tap(find.byTooltip('New Chat'));
     await tester.pumpAndSettle();
-    expect(find.text("Hi! I'm Child Assist."), findsOneWidget);
+    expect(find.text('Hey! 👋'), findsOneWidget);
     expect(find.text('First question'), findsNothing);
     expect(tester.widget<TextField>(find.byType(TextField)).focusNode!.hasFocus, isTrue);
 
@@ -220,7 +227,7 @@ void main() {
     // The deleted chat was open: going back shows a fresh chat.
     await tester.pageBack();
     await tester.pumpAndSettle();
-    expect(find.text("Hi! I'm Child Assist."), findsOneWidget);
+    expect(find.text('Hey! 👋'), findsOneWidget);
   });
 
   testWidgets('17. empty history', (tester) async {

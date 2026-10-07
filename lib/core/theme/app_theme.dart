@@ -31,11 +31,15 @@ abstract final class AppGradients {
     end: Alignment.bottomRight,
     colors: [Color(0xFF6A5CFF), Color(0xFF4433D6)],
   );
+  static const _heroColors = [Color(0xFF7B61FF), Color(0xFF5B4BFF), Color(0xFF3B2EC9)];
   static const hero = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFF7B61FF), Color(0xFF5B4BFF), Color(0xFF3B2EC9)],
+    colors: _heroColors,
   );
+
+  /// The header's colours laid out left to right, for the wide, short bottom navigation bar.
+  static const navigationBar = LinearGradient(colors: _heroColors);
   static const location = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
@@ -156,15 +160,16 @@ abstract final class AppTheme {
       textTheme: text,
       scaffoldBackgroundColor: isDark ? AppColors.darkBackground : AppColors.lightBackground,
       splashFactory: InkSparkle.splashFactory,
+      // Every screen's heading uses the brand purple; screens paint [AppBarGradient] over it.
       appBarTheme: AppBarTheme(
-        backgroundColor: Colors.transparent,
+        backgroundColor: AppColors.primary,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
-        centerTitle: false,
-        foregroundColor: scheme.onSurface,
-        titleTextStyle: text.titleLarge?.copyWith(color: scheme.onSurface, fontSize: 20),
-        systemOverlayStyle: isDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark,
+        centerTitle: true,
+        foregroundColor: Colors.white,
+        titleTextStyle: text.titleLarge?.copyWith(color: Colors.white, fontSize: 20),
+        systemOverlayStyle: SystemUiOverlayStyle.light,
       ),
       actionIconTheme: ActionIconThemeData(
         backButtonIconBuilder: (_) => const Icon(Icons.arrow_back_ios_new_rounded, size: 20),

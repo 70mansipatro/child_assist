@@ -21,7 +21,7 @@ class AuthBackdrop extends StatelessWidget {
           left: 0,
           right: 0,
           height: headerHeight + MediaQuery.paddingOf(context).top,
-          child: const HeroHeader(bottomRadius: 40, child: SizedBox.expand()),
+          child: const HeroHeader(child: SizedBox.expand()),
         ),
         // Anchored to the top so the brand always sits on the gradient and the form card
         // overlaps the header's lower edge, whatever the screen height.

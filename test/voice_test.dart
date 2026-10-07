@@ -330,7 +330,7 @@ void main() {
       await tester.pumpWidget(MyApp(services: services));
       await tester.pumpAndSettle();
       await logIn(tester, 'mansi@example.com');
-      await tapVisible(tester, find.text('Chat with your assistant'));
+      await openTab(tester, 'Chat');
       expect(find.byType(ChatScreen), findsOneWidget);
       os.calls.clear();
     }
@@ -570,13 +570,12 @@ void main() {
       expect(tts.spoken, ['My name is Child Assist.']);
     });
 
-    testWidgets('leaving the chat stops listening and speaking', (tester) async {
+    testWidgets('leaving the chat tab stops listening and speaking', (tester) async {
       await startApp(tester);
       tts.speak('Something');
       await startListening(tester);
 
-      await tester.pageBack();
-      await tester.pumpAndSettle();
+      await openTab(tester, 'Dashboard');
 
       expect(voice.calls, contains('cancel'));
       expect(voice.isListening, isFalse);

@@ -85,7 +85,7 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
   Widget build(BuildContext context) {
     final conversations = _conversations;
     return Scaffold(
-      appBar: AppBar(title: const Text('Chat History')),
+      appBar: AppBar(flexibleSpace: const AppBarGradient(), title: const Text('Chat History')),
       body: SafeArea(
         child: switch (conversations) {
           _ when _failed => StateMessage(

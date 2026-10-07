@@ -6,6 +6,7 @@ import 'package:child_assist/features/auth/data/token_storage.dart';
 import 'package:child_assist/features/auth/services/auth_service.dart';
 import 'package:child_assist/main.dart';
 
+import 'support/app_driver.dart';
 import 'support/fakes.dart';
 
 void main() {
@@ -23,15 +24,14 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, 'Log in'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Welcome, Mansi'), findsOneWidget);
+    expect(dashboard(), findsOneWidget);
     expect(find.text('Profile'), findsOneWidget);
     expect(find.text('Permissions'), findsOneWidget);
     expect(await TokenStorage().read(), FakeBackend.tokenFor('u1'));
 
-    await tester.tap(find.text('Logout'));
-    await tester.pumpAndSettle();
+    await logOut(tester);
 
-    expect(find.text('Welcome, Mansi'), findsNothing);
+    expect(dashboard(), findsNothing);
     expect(await TokenStorage().read(), isNull);
   });
 

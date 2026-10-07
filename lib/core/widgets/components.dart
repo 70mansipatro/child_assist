@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../theme/app_theme.dart';
 import 'motion.dart';
@@ -215,7 +216,7 @@ class HeroHeader extends StatelessWidget {
     required this.child,
     this.gradient = AppGradients.hero,
     this.padding = const EdgeInsets.fromLTRB(24, 16, 24, 32),
-    this.bottomRadius = AppSpacing.radiusXl,
+    this.bottomRadius = 0,
   });
 
   final Widget child;
@@ -225,6 +226,14 @@ class HeroHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // White status-bar icons while the header sits under the status bar.
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.light,
+      child: _buildPanel(),
+    );
+  }
+
+  Widget _buildPanel() {
     return ClipRRect(
       borderRadius: BorderRadius.vertical(bottom: Radius.circular(bottomRadius)),
       child: DecoratedBox(
@@ -260,6 +269,28 @@ class _Bubble extends StatelessWidget {
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           color: Colors.white.withValues(alpha: alpha),
+        ),
+      ),
+    );
+  }
+}
+
+/// The fill behind every screen's [AppBar] (pass as `flexibleSpace`): the same gradient and
+/// soft circles as the Dashboard and Profile headers, sized for a toolbar.
+class AppBarGradient extends StatelessWidget {
+  const AppBarGradient({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const DecoratedBox(
+      decoration: BoxDecoration(gradient: AppGradients.hero),
+      child: ClipRect(
+        child: Stack(
+          children: [
+            Positioned(top: -70, right: -40, child: _Bubble(size: 170, alpha: 0.10)),
+            Positioned(bottom: -60, left: -40, child: _Bubble(size: 120, alpha: 0.08)),
+            SizedBox.expand(),
+          ],
         ),
       ),
     );
@@ -454,6 +485,64 @@ class StateMessage extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// One row of a settings-style list: a gradient icon, a title, an optional subtitle and a
+/// trailing chevron (or any [trailing] widget). Group several inside an [AppCard].
+class MenuTile extends StatelessWidget {
+  const MenuTile({
+    super.key,
+    required this.icon,
+    required this.title,
+    this.subtitle,
+    this.gradient = AppGradients.brand,
+    this.onTap,
+    this.trailing,
+  });
+
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final Gradient gradient;
+  final VoidCallback? onTap;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return ListTile(
+      onTap: onTap,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      leading: IconBadge(icon: icon, gradient: gradient, size: 40, glow: false),
+      title: Text(title, style: theme.textTheme.titleSmall),
+      subtitle: subtitle == null ? null : Text(subtitle!, style: theme.textTheme.bodySmall),
+      trailing: trailing ??
+          (onTap == null ? null : Icon(Icons.chevron_right_rounded, color: theme.colorScheme.onSurfaceVariant)),
+    );
+  }
+}
+
+/// The full-width "Logout" button. Shows a spinner while signing out.
+class LogoutButton extends StatelessWidget {
+  const LogoutButton({super.key, required this.busy, required this.onPressed});
+
+  final bool busy;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      onPressed: busy ? null : onPressed,
+      style: OutlinedButton.styleFrom(
+        foregroundColor: AppColors.danger,
+        side: BorderSide(color: AppColors.danger.withValues(alpha: 0.4)),
+        minimumSize: const Size.fromHeight(52),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppSpacing.radius)),
+      ),
+      icon: busy ? const ButtonSpinner(size: 18, color: AppColors.danger) : const Icon(Icons.logout_rounded),
+      label: const Text('Logout'),
     );
   }
 }

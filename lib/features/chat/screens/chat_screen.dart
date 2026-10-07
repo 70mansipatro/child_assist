@@ -34,6 +34,7 @@ class ChatScreen extends StatefulWidget {
     required this.permissionSyncService,
     required this.textToSpeech,
     this.voiceInput = const UnavailableVoiceInput(),
+    this.active = true,
   });
 
   final ChatService chatService;
@@ -44,11 +45,14 @@ class ChatScreen extends StatefulWidget {
   final VoiceInput voiceInput;
   final TextToSpeechService textToSpeech;
 
+  /// False while another bottom-navigation tab is showing. Leaving the tab stops the
+  /// microphone and any speech, just like leaving the app.
+  final bool active;
+
   static const suggestions = [
-    'What is your name?',
+    'Where did I go yesterday?',
+    'Find my math notes',
     'What can you do?',
-    'Show my location history',
-    'Find my documents',
   ];
 
   @override
@@ -90,6 +94,15 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     _lifecycle;
+  }
+
+  @override
+  void didUpdateWidget(ChatScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.active && !widget.active) {
+      _focus.unfocus();
+      _voice.interrupt();
+    }
   }
 
   @override
@@ -170,17 +183,37 @@ class _ChatScreenState extends State<ChatScreen> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        titleSpacing: 0,
+        flexibleSpace: const AppBarGradient(),
         title: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            const AssistantAvatar(size: 36),
+            // A frosted tile, like the Dashboard logo, so the avatar stands out on the purple bar.
+            Semantics(
+              label: 'Child Assist',
+              child: Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.35)),
+                ),
+                child: const Icon(Icons.smart_toy_rounded, size: 20, color: Colors.white),
+              ),
+            ),
             const SizedBox(width: 10),
-            Expanded(
+            Flexible(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Child Assist', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-                  Text('Your personal assistant', style: theme.textTheme.bodySmall),
+                  Text(
+                    'Child Assist',
+                    style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700, color: Colors.white),
+                  ),
+                  Text(
+                    'Your personal assistant',
+                    style: theme.textTheme.bodySmall?.copyWith(color: Colors.white.withValues(alpha: 0.8)),
+                  ),
                 ],
               ),
             ),
@@ -338,35 +371,38 @@ class _Welcome extends StatelessWidget {
               const PopIn(child: AssistantAvatar(size: 72)),
               const SizedBox(height: 18),
               FadeSlideIn(
-                child: Text("Hi! I'm Child Assist.", textAlign: TextAlign.center, style: theme.textTheme.headlineSmall),
+                child: Text('Hey! 👋', textAlign: TextAlign.center, style: theme.textTheme.headlineSmall),
               ),
               const SizedBox(height: 8),
               FadeSlideIn(
                 index: 1,
                 child: Text(
-                  'I can help you with your information, conversations, location history, photos, documents, '
-                  'and other supported tasks.',
+                  'How can I help you today?',
                   textAlign: TextAlign.center,
-                  style: theme.textTheme.bodyMedium,
+                  style: theme.textTheme.titleMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                 ),
               ),
-              const SizedBox(height: 22),
-              FadeSlideIn(
-                index: 2,
-                child: Wrap(
-                  alignment: WrapAlignment.center,
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final prompt in ChatScreen.suggestions)
-                      ActionChip(
-                        avatar: Icon(Icons.auto_awesome_rounded, size: 16, color: theme.colorScheme.primary),
-                        label: Text(prompt),
-                        onPressed: () => onSuggestion(prompt),
+              const SizedBox(height: 24),
+              for (final (i, prompt) in ChatScreen.suggestions.indexed)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: FadeSlideIn(
+                    index: i + 2,
+                    child: AppCard(
+                      onTap: () => onSuggestion(prompt),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                      radius: AppSpacing.radius,
+                      child: Row(
+                        children: [
+                          Icon(Icons.auto_awesome_rounded, size: 18, color: theme.colorScheme.primary),
+                          const SizedBox(width: 12),
+                          Expanded(child: Text(prompt, style: theme.textTheme.bodyLarge)),
+                          Icon(Icons.north_east_rounded, size: 16, color: theme.colorScheme.onSurfaceVariant),
+                        ],
                       ),
-                  ],
+                    ),
+                  ),
                 ),
-              ),
             ],
           ),
         ),

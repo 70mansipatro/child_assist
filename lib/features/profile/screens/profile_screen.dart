@@ -5,10 +5,23 @@ import '../../../core/widgets/widgets.dart';
 import '../models/profile.dart';
 import '../services/profile_service.dart';
 
+/// The Profile tab: the account's name and email, links to Permissions, Notifications and
+/// App Settings, and Logout.
 class ProfileScreen extends StatefulWidget {
-  const ProfileScreen({super.key, required this.profileService});
+  const ProfileScreen({
+    super.key,
+    required this.profileService,
+    required this.onOpenPermissions,
+    required this.onOpenNotifications,
+    required this.onOpenSettings,
+    required this.onLogout,
+  });
 
   final ProfileService profileService;
+  final VoidCallback onOpenPermissions;
+  final VoidCallback onOpenNotifications;
+  final VoidCallback onOpenSettings;
+  final Future<void> Function() onLogout;
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -18,6 +31,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Profile? _profile;
   String? _error;
   bool _loading = true;
+  bool _loggingOut = false;
 
   @override
   void initState() {
@@ -54,18 +68,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  Future<void> _logout() async {
+    setState(() => _loggingOut = true);
+    // AuthService clears the token and notifies listeners; the app switches to Login.
+    await widget.onLogout();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final hasProfile = _profile != null;
+    // Once loaded, the title sits inside the gradient header and scrolls away with it.
     return Scaffold(
-      extendBodyBehindAppBar: hasProfile,
-      appBar: AppBar(
-        title: const Text('Profile'),
-        foregroundColor: hasProfile ? Colors.white : null,
-        titleTextStyle: hasProfile
-            ? Theme.of(context).appBarTheme.titleTextStyle?.copyWith(color: Colors.white)
-            : null,
-      ),
+      appBar: _profile == null ? AppBar(flexibleSpace: const AppBarGradient(), title: const Text('Profile')) : null,
       body: _buildBody(context),
     );
   }
@@ -87,20 +100,36 @@ class _ProfileScreenState extends State<ProfileScreen> {
             icon: const Icon(Icons.refresh_rounded),
             label: const Text('Try again'),
           ),
+          secondaryAction: TextButton(onPressed: _loggingOut ? null : _logout, child: const Text('Logout')),
         ),
       );
     }
 
     final theme = Theme.of(context);
     final hasName = profile.name?.isNotEmpty == true;
+    final divider = Divider(height: 1, indent: 72, endIndent: 16, color: theme.colorScheme.outlineVariant);
     return ListView(
-      padding: EdgeInsets.zero,
+      padding: const EdgeInsets.only(bottom: 8),
       children: [
         HeroHeader(
           gradient: AppGradients.hero,
-          padding: EdgeInsets.fromLTRB(24, MediaQuery.paddingOf(context).top + kToolbarHeight + 8, 24, 64),
+          padding: EdgeInsets.fromLTRB(16, MediaQuery.paddingOf(context).top, 16, 64),
           child: Column(
             children: [
+              SizedBox(
+                height: kToolbarHeight,
+                child: Align(
+                  child: Semantics(
+                    header: true,
+                    child: Text(
+                      'Profile',
+                      style: theme.appBarTheme.titleTextStyle?.copyWith(color: Colors.white) ??
+                          theme.textTheme.titleLarge?.copyWith(color: Colors.white),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
               PopIn(child: _ProfileAvatar(profile: profile, onEdit: _editProfile)),
               const SizedBox(height: 14),
               FadeSlideIn(
@@ -149,10 +178,43 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     const SizedBox(height: 20),
                     FadeSlideIn(
                       index: 2,
-                      child: GradientButton(
-                        onPressed: _editProfile,
-                        icon: const Icon(Icons.edit_rounded, size: 20),
-                        label: const Text('Edit Profile'),
+                      child: AppCard(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Column(
+                          children: [
+                            MenuTile(
+                              icon: Icons.manage_accounts_rounded,
+                              gradient: AppGradients.profile,
+                              title: 'Account',
+                              subtitle: 'Edit your name',
+                              onTap: _editProfile,
+                            ),
+                            divider,
+                            MenuTile(
+                              icon: Icons.verified_user_rounded,
+                              gradient: AppGradients.permissions,
+                              title: 'Permissions',
+                              subtitle: 'Manage your app permissions',
+                              onTap: widget.onOpenPermissions,
+                            ),
+                            divider,
+                            MenuTile(
+                              icon: Icons.notifications_rounded,
+                              gradient: AppGradients.notifications,
+                              title: 'Notifications',
+                              subtitle: 'View your notifications',
+                              onTap: widget.onOpenNotifications,
+                            ),
+                            divider,
+                            MenuTile(
+                              icon: Icons.settings_rounded,
+                              gradient: AppGradients.brand,
+                              title: 'App Settings',
+                              subtitle: 'Voice, language and theme',
+                              onTap: widget.onOpenSettings,
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                     const SizedBox(height: 16),
@@ -165,6 +227,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         ),
                       ),
                     ),
+                    const SizedBox(height: 20),
+                    FadeSlideIn(index: 4, child: LogoutButton(busy: _loggingOut, onPressed: _logout)),
                   ],
                 ),
               ),

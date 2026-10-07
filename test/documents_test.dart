@@ -85,7 +85,7 @@ void main() {
     testWidgets('1. opens from Home without any permission dialog', (tester) async {
       await startApp(tester);
       expect(find.text('Documents'), findsOneWidget);
-      expect(find.text('Files from your device'), findsOneWidget);
+      expect(find.text('Find your notes and files'), findsOneWidget);
 
       await openDocuments(tester);
       expect(find.byType(DocumentsScreen), findsOneWidget);
@@ -498,7 +498,7 @@ void main() {
       await tester.pageBack();
       await tester.pumpAndSettle();
       expect(find.byType(DocumentsScreen), findsNothing);
-      expect(find.text('Welcome, Mansi'), findsOneWidget);
+      expect(dashboard(), findsOneWidget);
     });
   });
 
@@ -551,8 +551,6 @@ void main() {
 
       // Another account on the same phone does not see it.
       await tester.pageBack();
-      await tester.pumpAndSettle();
-      await tester.ensureVisible(find.text('Logout'));
       await tester.pumpAndSettle();
       await logOut(tester);
       await logIn(tester, 'ravi@example.com');

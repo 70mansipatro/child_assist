@@ -50,7 +50,7 @@ void main() {
   }
 
   Finder onboarding() => find.byType(PermissionOnboardingScreen);
-  Finder home() => find.text('Quick Actions');
+  Finder home() => dashboard();
   Finder stepTitle(int index) => find.text(permissionOnboardingSteps[index].title);
 
   void expectStep(int index) {
@@ -89,7 +89,6 @@ void main() {
 
       expect(os.dialogsShown, expected);
       expect(home(), findsOneWidget);
-      expect(find.text('Welcome, New Kid'), findsOneWidget);
       expect(backend.permissions[id], {
         'LOCATION': 'GRANTED',
         'CAMERA': 'GRANTED',
