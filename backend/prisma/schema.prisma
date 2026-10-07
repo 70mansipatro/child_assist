@@ -38,8 +38,33 @@ model User {
   chatToolCalls     ChatToolCall[]
 
   emailVerificationCodes EmailVerificationCode[]
+  passwordResetCodes     PasswordResetCode[]
 
   @@map("users")
+}
+
+// One-time codes emailed for "Forgot password", kept apart from email verification: a code for one
+// purpose never works for the other. Only an HMAC of the code is stored. A correct code is not a
+// password change by itself: it sets verifiedAt and a short-lived reset token (stored only as a
+// SHA-256 hash) that POST /api/auth/reset-password spends. consumedAt marks the row dead: after the
+// password changes, or when a newer code replaces it. Also dead once expired or after 5 wrong tries.
+model PasswordResetCode {
+  id                  String    @id @default(cuid())
+  userId              String    @map("user_id") @db.Uuid
+  codeHash            String    @map("code_hash") @db.VarChar(64)
+  expiresAt           DateTime  @map("expires_at")
+  attempts            Int       @default(0)
+  verifiedAt          DateTime? @map("verified_at")
+  resetTokenHash      String?   @unique @map("reset_token_hash") @db.VarChar(64)
+  resetTokenExpiresAt DateTime? @map("reset_token_expires_at")
+  consumedAt          DateTime? @map("consumed_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_codes")
 }
 
 // One-time codes emailed to verify a password account's address. Only an HMAC of the code is

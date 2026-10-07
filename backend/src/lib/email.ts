@@ -11,7 +11,8 @@ export interface EmailMessage {
 
 export type EmailSender = (message: EmailMessage) => Promise<void>;
 
-const EMAIL_UNAVAILABLE = "Email verification is temporarily unavailable. Please try again later.";
+// Shared by every flow that emails a code (verification and password reset).
+const EMAIL_UNAVAILABLE = "Email is temporarily unavailable. Please try again later.";
 
 let senderOverride: EmailSender | null = null;
 
@@ -101,4 +102,77 @@ export function verificationEmail(to: string, code: string, ttlMinutes: number):
 </html>`;
 
   return { to, subject: "Verify your Child Assist account", text, html };
+}
+
+/** Shared frame for the account emails: a header bar and a white card. `body` must be safe HTML. */
+function emailLayout(body: string): string {
+  return `<!doctype html>
+<html>
+  <body style="margin:0;padding:24px;background:#f4f3fb;font-family:Arial,Helvetica,sans-serif;color:#1f1b2e;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:16px;overflow:hidden;">
+      <tr><td style="background:linear-gradient(135deg,#6d5dfc,#4f46e5);background-color:#5b4ff0;padding:20px 24px;color:#ffffff;font-size:20px;font-weight:bold;">Child Assist</td></tr>
+      <tr><td style="padding:24px;">
+${body}
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+}
+
+/** The password reset code email. Contains only the code: no account details, IDs or tokens. */
+export function passwordResetEmail(to: string, code: string, ttlMinutes: number): EmailMessage {
+  const text = [
+    "Child Assist",
+    "",
+    "Password Reset",
+    "",
+    "We received a request to reset your Child Assist password.",
+    "",
+    "Your verification code is:",
+    "",
+    code,
+    "",
+    `This code expires in ${ttlMinutes} minutes.`,
+    "",
+    "If you did not request this, you can safely ignore this email. Your password will not change.",
+    "",
+    "Child Assist",
+  ].join("\n");
+
+  // `code` is always 6 digits, so nothing here needs HTML escaping.
+  const html = emailLayout(`        <p style="margin:0 0 8px;font-size:18px;font-weight:bold;">Password Reset</p>
+        <p style="margin:0 0 12px;font-size:15px;">We received a request to reset your Child Assist password.</p>
+        <p style="margin:0 0 12px;font-size:15px;">Your verification code is:</p>
+        <p style="margin:0 0 16px;font-size:32px;font-weight:bold;letter-spacing:8px;color:#4f46e5;">${code}</p>
+        <p style="margin:0 0 12px;font-size:14px;">This code expires in ${ttlMinutes} minutes.</p>
+        <p style="margin:0;font-size:13px;color:#6b6880;">If you did not request this, you can safely ignore this email. Your password will not change.</p>`);
+
+  return { to, subject: "Reset your Child Assist password", text, html };
+}
+
+/**
+ * Sent instead of a code when "Forgot password" is used for an account that signs in with Google
+ * and has no password. Only the address owner learns this, never the API caller.
+ */
+export function googleAccountResetEmail(to: string): EmailMessage {
+  const text = [
+    "Child Assist",
+    "",
+    "Password Reset",
+    "",
+    "We received a request to reset your Child Assist password, but your account signs in with Google and has no password to reset.",
+    "",
+    'Open Child Assist and tap "Continue with Google" to sign in.',
+    "",
+    "If you did not request this, you can safely ignore this email.",
+    "",
+    "Child Assist",
+  ].join("\n");
+
+  const html = emailLayout(`        <p style="margin:0 0 8px;font-size:18px;font-weight:bold;">Password Reset</p>
+        <p style="margin:0 0 12px;font-size:15px;">We received a request to reset your Child Assist password, but your account signs in with Google and has no password to reset.</p>
+        <p style="margin:0 0 12px;font-size:15px;">Open Child Assist and tap <b>Continue with Google</b> to sign in.</p>
+        <p style="margin:0;font-size:13px;color:#6b6880;">If you did not request this, you can safely ignore this email.</p>`);
+
+  return { to, subject: "Your Child Assist account uses Google Sign-In", text, html };
 }

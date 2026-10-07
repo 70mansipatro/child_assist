@@ -14,7 +14,7 @@ import type {
   VerifyEmailInput,
 } from "./auth.validation";
 
-const BCRYPT_ROUNDS = 12;
+export const BCRYPT_ROUNDS = 12;
 
 // The only user fields ever returned to clients. passwordHash is never part of this.
 const safeUserSelect = { id: true, name: true, email: true } as const;

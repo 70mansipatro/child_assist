@@ -4,6 +4,7 @@ import '../../../core/api/api_client.dart';
 import '../../../core/widgets/widgets.dart';
 import '../services/auth_service.dart';
 import '../widgets/auth_widgets.dart';
+import 'forgot_password_screen.dart';
 import 'register_screen.dart';
 import 'verify_email_screen.dart';
 
@@ -76,6 +77,24 @@ class _LoginScreenState extends State<LoginScreen> {
     });
   }
 
+  /// Opens Forgot Password. It ends with the email once the password has been reset; the user then
+  /// logs in here with the new password. No session is started by the reset itself.
+  Future<void> _openForgotPassword() async {
+    final email = await Navigator.of(context).push<String>(MaterialPageRoute(
+      builder: (_) => ForgotPasswordScreen(
+        authService: widget.authService,
+        initialEmail: _emailController.text.trim(),
+      ),
+    ));
+    if (email == null || !mounted) return;
+    setState(() {
+      _emailController.text = email;
+      _passwordController.clear();
+      _error = null;
+      _notice = 'Password reset successfully. Please log in with your new password.';
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -127,9 +146,17 @@ class _LoginScreenState extends State<LoginScreen> {
                         validator: (v) =>
                             (v == null || v.isEmpty) ? 'Please enter your password' : null,
                       ),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton(
+                          key: const ValueKey('forgot-password'),
+                          onPressed: _busy ? null : _openForgotPassword,
+                          child: const Text('Forgot Password?', style: TextStyle(fontWeight: FontWeight.w600)),
+                        ),
+                      ),
                       AuthError(message: _error),
                       AuthError(message: _notice, tone: BannerTone.success),
-                      const SizedBox(height: 18),
+                      const SizedBox(height: 10),
                       GradientButton(
                         onPressed: _busy ? null : _submit,
                         label: _submitting ? const ButtonSpinner() : const Text('Log in'),

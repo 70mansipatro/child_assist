@@ -14,10 +14,18 @@ Future<void> logIn(WidgetTester tester, String email) async {
   await tester.pumpAndSettle();
 }
 
+/// Opens Register from Login. The link sits below the fold on small screens, so scroll to it first.
+Future<void> openRegister(WidgetTester tester) async {
+  final link = find.text("Don't have an account? Register");
+  await tester.ensureVisible(link);
+  await tester.pumpAndSettle();
+  await tester.tap(link);
+  await tester.pumpAndSettle();
+}
+
 /// Opens Register from Login and submits the form. Leaves the app on Verify Email.
 Future<void> submitRegistration(WidgetTester tester, String name, String email) async {
-  await tester.tap(find.text("Don't have an account? Register"));
-  await tester.pumpAndSettle();
+  await openRegister(tester);
   await tester.enterText(find.byType(TextFormField).at(0), name);
   await tester.enterText(find.byType(TextFormField).at(1), email);
   await tester.enterText(find.byType(TextFormField).at(2), testPassword);

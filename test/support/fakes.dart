@@ -157,6 +157,53 @@ class FakeBackend {
 
   int _nextCode = 0;
 
+  /// email -> password, for accounts whose password is not [testPassword] (e.g. after a reset).
+  final Map<String, String> passwords = {};
+
+  /// email -> the latest password reset code "emailed" to it. Only tests read this.
+  final Map<String, String> resetInbox = {};
+
+  /// Every email a reset code was sent to, in order.
+  final List<String> resetCodeEmails = [];
+
+  /// Reset codes that the next verification should treat as expired.
+  final Set<String> expiredResetCodes = {};
+
+  /// Live reset tokens -> the email they reset. Removed once used.
+  final Map<String, String> resetTokens = {};
+
+  /// When true, POST /api/auth/reset-password treats every token as expired.
+  bool resetTokensExpired = false;
+
+  /// Bodies POSTed to the password reset endpoints.
+  final List<Map<String, dynamic>> forgotRequests = [];
+  final List<Map<String, dynamic>> resendResetRequests = [];
+  final List<Map<String, dynamic>> verifyResetRequests = [];
+  final List<Map<String, dynamic>> resetPasswordRequests = [];
+
+  /// When set, POST /api/auth/verify-reset-code waits for this before answering.
+  Completer<void>? verifyResetPending;
+
+  int _nextResetToken = 1;
+
+  static const resetRequested = 'If an account exists for this email, a password reset code has been sent.';
+  static const invalidResetCode =
+      'This code is invalid or has expired. Check your latest email or request a new code.';
+  static const invalidResetToken = 'Your password reset session has expired. Please request a new code.';
+
+  void _sendResetCode(String email) {
+    final code = (731402 + 6113 * _nextCode++).remainder(1000000).toString().padLeft(6, '0');
+    resetInbox[email] = code;
+    resetCodeEmails.add(email);
+  }
+
+  /// Like the server: only accounts with a password get a code; the answer is always the same.
+  http.Response _requestReset(Map<String, dynamic> body) {
+    final user = users.values.where((u) => u['email'] == body['email']).firstOrNull;
+    if (user != null && !passwordless.contains(user['id'])) _sendResetCode(body['email'] as String);
+    return _json(200, {'message': resetRequested});
+  }
+
   void _sendCode(String email) {
     // Deterministic but varied codes.
     final code = (482913 + 7919 * _nextCode++).remainder(1000000).toString().padLeft(6, '0');
@@ -207,7 +254,7 @@ class FakeBackend {
           'code': 'USE_GOOGLE_SIGN_IN',
         });
       }
-      if (user == null || body['password'] != testPassword) {
+      if (user == null || body['password'] != (passwords[user['email']] ?? testPassword)) {
         return _json(401, {'message': 'Invalid email or password'});
       }
       if (unverified.contains(user['id'])) {
@@ -261,6 +308,65 @@ class FakeBackend {
       final user = users.values.where((u) => u['email'] == body['email']).firstOrNull;
       if (user != null && unverified.contains(user['id'])) _sendCode(body['email'] as String);
       return _json(200, {'message': 'If verification is required, a new code has been sent.'});
+    }
+
+    if (path == '/api/auth/forgot-password') {
+      final body = jsonDecode(req.body) as Map<String, dynamic>;
+      forgotRequests.add(body);
+      return _requestReset(body);
+    }
+
+    if (path == '/api/auth/resend-reset-code') {
+      final body = jsonDecode(req.body) as Map<String, dynamic>;
+      resendResetRequests.add(body);
+      return _requestReset(body);
+    }
+
+    if (path == '/api/auth/verify-reset-code') {
+      final body = jsonDecode(req.body) as Map<String, dynamic>;
+      verifyResetRequests.add(body);
+      if (verifyResetPending != null) await verifyResetPending!.future;
+      final email = body['email'] as String;
+      final code = resetInbox[email];
+      if (code == null || body['code'] != code || expiredResetCodes.contains(code)) {
+        return _json(400, {'message': invalidResetCode, 'code': 'INVALID_RESET_CODE'});
+      }
+      resetInbox.remove(email);
+      final token = 'reset-token-${_nextResetToken++}';
+      resetTokens[token] = email;
+      return _json(200, {
+        'message': 'Code verified. You can now create a new password.',
+        'resetToken': token,
+        'expiresInSeconds': 600,
+      });
+    }
+
+    if (path == '/api/auth/reset-password') {
+      final body = jsonDecode(req.body) as Map<String, dynamic>;
+      resetPasswordRequests.add(body);
+      final password = body['newPassword'] as String? ?? '';
+      if (password.length < 8) {
+        return _json(400, {
+          'message': 'Validation failed',
+          'errors': [
+            {'field': 'newPassword', 'message': 'Password must be at least 8 characters'},
+          ],
+        });
+      }
+      if (body['confirmPassword'] != null && body['confirmPassword'] != password) {
+        return _json(400, {
+          'message': 'Validation failed',
+          'errors': [
+            {'field': 'confirmPassword', 'message': 'Passwords do not match'},
+          ],
+        });
+      }
+      final email = resetTokens.remove(body['resetToken']);
+      if (email == null || resetTokensExpired) {
+        return _json(400, {'message': invalidResetToken, 'code': 'INVALID_RESET_TOKEN'});
+      }
+      passwords[email] = password;
+      return _json(200, {'message': 'Password reset successfully.'});
     }
 
     if (path == '/api/auth/google') {

@@ -16,8 +16,6 @@ class RegisterScreen extends StatefulWidget {
 }
 
 class _RegisterScreenState extends State<RegisterScreen> {
-  static const _minPasswordLength = 8;
-
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
@@ -122,14 +120,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         keyboardType: TextInputType.emailAddress,
                         autofillHints: const [AutofillHints.email],
                         textInputAction: TextInputAction.next,
-                        validator: (v) {
-                          final value = v?.trim() ?? '';
-                          if (value.isEmpty) return 'Please enter your email';
-                          if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(value)) {
-                            return 'Please enter a valid email';
-                          }
-                          return null;
-                        },
+                        validator: AuthValidators.email,
                       ),
                       const SizedBox(height: 12),
                       TextFormField(
@@ -141,16 +132,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             obscured: _obscure,
                             onPressed: () => setState(() => _obscure = !_obscure),
                           ),
-                          helperText: 'At least $_minPasswordLength characters',
+                          helperText: 'At least ${AuthValidators.minPasswordLength} characters',
                           errorText: _fieldErrors['password'],
                         ),
                         obscureText: _obscure,
                         autofillHints: const [AutofillHints.newPassword],
                         textInputAction: TextInputAction.done,
                         onFieldSubmitted: (_) => _busy ? null : _submit(),
-                        validator: (v) => (v == null || v.length < _minPasswordLength)
-                            ? 'Password must be at least $_minPasswordLength characters'
-                            : null,
+                        validator: AuthValidators.newPassword,
                       ),
                       AuthError(message: _fieldErrors.isEmpty ? _error : null),
                       const SizedBox(height: 18),

@@ -76,6 +76,24 @@ class AuthService extends ChangeNotifier {
     return _api.resendVerification(email: email);
   }
 
+  /// Asks for a password reset code. Returns the server's (deliberately generic) message.
+  Future<String> forgotPassword({required String email}) => _api.forgotPassword(email: email);
+
+  /// Asks for a new password reset code. Returns the server's generic message.
+  Future<String> resendResetCode({required String email}) => _api.resendResetCode(email: email);
+
+  /// Exchanges the emailed reset code for a single-use reset token. Does not sign in.
+  Future<String> verifyResetCode({required String email, required String code}) =>
+      _api.verifyResetCode(email: email, code: code);
+
+  /// Sets a new password with the reset token. Does not sign in: the user logs in afterwards.
+  Future<String> resetPassword({
+    required String resetToken,
+    required String newPassword,
+    required String confirmPassword,
+  }) =>
+      _api.resetPassword(resetToken: resetToken, newPassword: newPassword, confirmPassword: confirmPassword);
+
   /// Throws [EmailNotVerifiedException] if the password is right but the email is not verified
   /// yet, or [ApiException] for any other failure.
   Future<void> login({required String email, required String password}) async {

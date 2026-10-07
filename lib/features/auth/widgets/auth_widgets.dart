@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 
 import '../../../core/api/api_client.dart';
@@ -301,5 +303,30 @@ class PasswordVisibilityToggle extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// Form rules shared by Register and Reset Password. They mirror the server's, which still checks.
+abstract final class AuthValidators {
+  static const minPasswordLength = 8;
+
+  /// bcrypt only uses the first 72 bytes of a password, so the server refuses anything longer.
+  static const maxPasswordBytes = 72;
+
+  static final _email = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+
+  static String? email(String? v) {
+    final value = v?.trim() ?? '';
+    if (value.isEmpty) return 'Please enter your email';
+    if (!_email.hasMatch(value)) return 'Please enter a valid email';
+    return null;
+  }
+
+  static String? newPassword(String? v) {
+    if (v == null || v.length < minPasswordLength) {
+      return 'Password must be at least $minPasswordLength characters';
+    }
+    if (utf8.encode(v).length > maxPasswordBytes) return 'Password is too long';
+    return null;
   }
 }

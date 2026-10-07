@@ -65,8 +65,7 @@ void main() {
 
   testWidgets('Register also offers Continue with Google', (tester) async {
     await startApp(tester);
-    await tester.tap(find.text("Don't have an account? Register"));
-    await tester.pumpAndSettle();
+    await openRegister(tester);
     expect(find.text('Create account'), findsOneWidget);
     expect(googleButton(), findsOneWidget);
   });

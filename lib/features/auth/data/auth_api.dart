@@ -49,6 +49,43 @@ class AuthApi {
     return json['message'] as String? ?? 'If verification is required, a new code has been sent.';
   }
 
+  /// Starts "Forgot password". The server answers the same whether or not the email has an
+  /// account (and emails a code only if it has a password). Returns its message.
+  Future<String> forgotPassword({required String email}) async {
+    final json = await _client.post('/api/auth/forgot-password', body: {'email': email});
+    return json['message'] as String? ?? _resetRequested;
+  }
+
+  /// Asks for a new reset code. Same generic answer as [forgotPassword]; the server rate-limits it.
+  Future<String> resendResetCode({required String email}) async {
+    final json = await _client.post('/api/auth/resend-reset-code', body: {'email': email});
+    return json['message'] as String? ?? _resetRequested;
+  }
+
+  /// Checks the emailed reset code and returns a short-lived, single-use reset token. The token
+  /// is not a session and opens nothing else. Throws [ApiException] (code `INVALID_RESET_CODE`) if
+  /// the code is wrong, expired, already used or out of attempts.
+  Future<String> verifyResetCode({required String email, required String code}) async {
+    final json = await _client.post('/api/auth/verify-reset-code', body: {'email': email, 'code': code});
+    return json['resetToken'] as String;
+  }
+
+  /// Sets the new password with the token from [verifyResetCode]. Does not sign in. Throws
+  /// [ApiException] (code `INVALID_RESET_TOKEN`) if the token has expired or was already used.
+  Future<String> resetPassword({
+    required String resetToken,
+    required String newPassword,
+    required String confirmPassword,
+  }) async {
+    final json = await _client.post(
+      '/api/auth/reset-password',
+      body: {'resetToken': resetToken, 'newPassword': newPassword, 'confirmPassword': confirmPassword},
+    );
+    return json['message'] as String? ?? 'Password reset successfully.';
+  }
+
+  static const _resetRequested = 'If an account exists for this email, a password reset code has been sent.';
+
   Future<AuthResponse> login({required String email, required String password}) async {
     final json = await _client.post(
       '/api/auth/login',
