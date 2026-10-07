@@ -197,9 +197,13 @@ class ChatPlace {
     this.city,
     this.state,
     this.country,
+    this.automatic = false,
   });
 
   final DateTime capturedAt;
+
+  /// Saved by Automatic Location History rather than "Get Current Location".
+  final bool automatic;
   final double latitude;
   final double longitude;
   final String? placeName;
@@ -242,6 +246,7 @@ class ChatPlace {
       city: text('city'),
       state: text('state'),
       country: text('country'),
+      automatic: json['source'] == 'AUTOMATIC',
     );
   }
 }

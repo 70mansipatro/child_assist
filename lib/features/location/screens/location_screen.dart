@@ -7,26 +7,32 @@ import '../../../core/permissions/permission_service.dart';
 import '../../../core/navigation/app_menu.dart';
 import '../../../core/widgets/widgets.dart';
 import '../../permissions/services/permission_sync_service.dart';
+import '../data/location_api.dart' show maxHistoryResults;
 import '../models/location_record.dart';
+import '../services/automatic_location_tracking_service.dart';
 import '../services/location_history_service.dart';
 import '../services/location_service.dart';
+import '../widgets/tracking_status.dart';
 
-/// Shows the user's current location (read only when they tap the button) and the
-/// locations they have saved.
+/// Shows the user's current location (read only when they tap the button), the Automatic
+/// Location History switch, today's travel and the locations they have saved.
 ///
 /// Opening this screen never shows a permission dialog: it only checks the status so it can
-/// explain a blocked permission. The OS dialog appears after "Get Current Location".
+/// explain a blocked permission. The OS dialogs appear after "Get Current Location", or after
+/// the user switches on Automatic Location History and confirms the explanation.
 class LocationScreen extends StatefulWidget {
   const LocationScreen({
     super.key,
     required this.locationService,
     required this.historyService,
     required this.permissionSyncService,
+    required this.trackingService,
   });
 
   final LocationService locationService;
   final LocationHistoryService historyService;
   final PermissionSyncService permissionSyncService;
+  final AutomaticLocationTrackingService trackingService;
 
   @override
   State<LocationScreen> createState() => _LocationScreenState();
@@ -41,13 +47,21 @@ class _LocationScreenState extends State<LocationScreen> {
   bool _saved = false;
   String? _saveError;
 
-  bool _historyLoading = true;
-  String? _historyError;
   bool _clearing = false;
+
+  // "Search by Date": a single day or a range, chosen with the platform date pickers.
+  bool _rangeMode = false;
+  DateTime? _customDate;
+  DateTimeRange? _customRange;
+  String? _customError;
+
+  /// Reload the lists when Automatic Location History stores a new place.
+  late int _seenSaves = widget.trackingService.savedCount;
 
   @override
   void initState() {
     super.initState();
+    widget.trackingService.addListener(_onTrackingChanged);
     // The user may change the permission or turn on location in Settings and come back.
     _lifecycle = AppLifecycleListener(
       onResume: () {
@@ -56,12 +70,97 @@ class _LocationScreenState extends State<LocationScreen> {
     );
     _recheckAccess();
     _loadHistory();
+    widget.historyService.loadToday();
   }
 
   @override
   void dispose() {
+    widget.trackingService.removeListener(_onTrackingChanged);
     _lifecycle.dispose();
     super.dispose();
+  }
+
+  void _onTrackingChanged() {
+    final saves = widget.trackingService.savedCount;
+    if (saves == _seenSaves) return;
+    _seenSaves = saves;
+    unawaited(_loadHistory());
+    unawaited(widget.historyService.loadToday());
+  }
+
+  /// The switch. Turning it on first explains what is collected; only then does the OS ask.
+  Future<void> _onTrackingSwitch(bool on) async {
+    final tracking = widget.trackingService;
+    final messenger = ScaffoldMessenger.of(context);
+    if (!on) {
+      await tracking.disable();
+      messenger.showSnackBar(const SnackBar(
+        content: Text('Automatic Location History is off. Places already saved are kept.'),
+      ));
+      return;
+    }
+    final confirmed = await _confirmTracking();
+    if (confirmed != true || !mounted) return;
+    await tracking.enable();
+    if (!mounted) return;
+    if (tracking.isActive) {
+      messenger.showSnackBar(const SnackBar(content: Text('Automatic Location History is on.')));
+      unawaited(widget.historyService.loadToday());
+    }
+  }
+
+  Future<bool?> _confirmTracking() {
+    Widget point(IconData icon, String text) => Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 20, color: AppColors.teal),
+          const SizedBox(width: 10),
+          Expanded(child: Text(text)),
+        ],
+      ),
+    );
+    return showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: const ValueKey('automatic-tracking-explanation'),
+        icon: const IconBadge(icon: Icons.route_rounded, gradient: AppGradients.location, size: 52),
+        title: const Text('Turn on Automatic Location History?'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              point(
+                Icons.place_outlined,
+                'What is saved: the places where you stay for a few minutes, with the time and the place '
+                    "name from your phone. Child Assist doesn't record the route you travel.",
+              ),
+              point(
+                Icons.visibility_outlined,
+                'Your location will be collected even when the app is closed or not in use. On Android '
+                    'a notification shows the whole time this is happening.',
+              ),
+              point(Icons.battery_alert_outlined, 'Automatic location history may use additional battery.'),
+              point(
+                Icons.toggle_off_outlined,
+                'You can stop it at any time with this switch. Places already saved stay until you clear '
+                    'your location history.',
+              ),
+              point(
+                Icons.settings_outlined,
+                'Next, your phone will ask for location access. Choose "Allow all the time" so places can '
+                    'be saved while the app is closed.',
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(dialogContext).pop(false), child: const Text('Not now')),
+          FilledButton(onPressed: () => Navigator.of(dialogContext).pop(true), child: const Text('Continue')),
+        ],
+      ),
+    );
   }
 
   /// Status checks only, no dialogs. Shows a blocked permission up front and clears a
@@ -90,19 +189,57 @@ class _LocationScreenState extends State<LocationScreen> {
     });
   }
 
-  Future<void> _loadHistory() async {
+  /// Reloads whatever the history currently shows. Reads saved records only: no GPS and no
+  /// location permission are needed, so history works with location turned off.
+  Future<void> _loadHistory() => widget.historyService.load();
+
+  Future<void> _searchFilter(LocationHistoryFilter filter) => widget.historyService.searchFilter(filter);
+
+  Future<void> _pickDate() async {
+    final today = DateUtils.dateOnly(DateTime.now());
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _customDate ?? today,
+      firstDate: _firstPickableDate,
+      lastDate: today,
+      helpText: 'Select a date',
+    );
+    if (picked == null || !mounted) return;
     setState(() {
-      _historyLoading = true;
-      _historyError = null;
+      _customDate = picked;
+      _customError = null;
     });
-    try {
-      await widget.historyService.load();
-    } on ApiException catch (e) {
-      if (mounted) setState(() => _historyError = e.message);
-    } finally {
-      if (mounted) setState(() => _historyLoading = false);
-    }
   }
+
+  Future<void> _pickRange() async {
+    final today = DateUtils.dateOnly(DateTime.now());
+    final picked = await showDateRangePicker(
+      context: context,
+      initialDateRange: _customRange,
+      firstDate: _firstPickableDate,
+      lastDate: today,
+      helpText: 'Select a date range',
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _customRange = picked;
+      _customError = validateHistoryRange(HistoryDateRange(picked.start, picked.end));
+    });
+  }
+
+  Future<void> _searchCustom() async {
+    final query = _rangeMode
+        ? (_customRange == null ? null : LocationHistoryQuery.range(_customRange!.start, _customRange!.end))
+        : (_customDate == null ? null : LocationHistoryQuery.date(_customDate!));
+    if (query == null) return;
+    final problem = validateHistoryRange(query.range!);
+    setState(() => _customError = problem);
+    if (problem != null) return;
+    await widget.historyService.search(query);
+  }
+
+  /// The pickers go back far enough for any saved history; each search is still at most a year.
+  static final _firstPickableDate = DateTime(2000);
 
   Future<void> _getCurrentLocation() async {
     if (_locating) return; // one request at a time
@@ -127,10 +264,7 @@ class _LocationScreenState extends State<LocationScreen> {
       try {
         await widget.historyService.save(location);
         if (!mounted) return;
-        setState(() {
-          _saved = true;
-          _historyError = null;
-        });
+        setState(() => _saved = true);
       } on ApiException catch (e) {
         if (mounted) setState(() => _saveError = 'Could not save this location: ${e.message}');
       }
@@ -175,7 +309,8 @@ class _LocationScreenState extends State<LocationScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(deleted == 1 ? 'Deleted 1 saved location' : 'Deleted $deleted saved locations')),
       );
-      await _loadHistory();
+      unawaited(_loadHistory());
+      unawaited(widget.historyService.loadToday());
     } on ApiException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not clear history: ${e.message}')));
@@ -206,9 +341,10 @@ class _LocationScreenState extends State<LocationScreen> {
       ),
       body: SafeArea(
         child: ListenableBuilder(
-          listenable: widget.historyService,
+          listenable: Listenable.merge([widget.historyService, widget.trackingService]),
           builder: (context, _) {
-            final records = widget.historyService.records;
+            final history = widget.historyService;
+            final records = history.records;
             return Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 640),
@@ -220,8 +356,9 @@ class _LocationScreenState extends State<LocationScreen> {
                         icon: Icons.privacy_tip_outlined,
                         tone: BannerTone.success,
                         message: const Text(
-                          'Your location is saved only when you choose to get your current '
-                          'location.\n\nChild Assist does not track your location continuously.',
+                          'Your location is saved when you tap "Get Current Location", or automatically '
+                          'while you have Automatic Location History switched on.\n\nYou can turn it off '
+                          'at any time.',
                         ),
                       ),
                     ),
@@ -260,20 +397,29 @@ class _LocationScreenState extends State<LocationScreen> {
                       InfoBanner(tone: BannerTone.danger, message: Text(_saveError!)),
                     ],
                     const SizedBox(height: 28),
+                    FadeSlideIn(index: 3, child: _buildAutomaticCard(theme)),
+                    const SizedBox(height: 28),
+                    ..._buildTodayTravel(theme),
+                    const SizedBox(height: 28),
                     SectionTitle(
                       'Location History',
-                      subtitle: records.isEmpty
-                          ? null
-                          : records.length == 1
-                          ? '1 saved place'
-                          : '${records.length} saved places',
+                      subtitle: _historySubtitle(records),
                       trailing: TextButton.icon(
-                        onPressed: busy || _historyLoading ? null : _loadHistory,
+                        onPressed: busy || history.loading
+                            ? null
+                            : () {
+                                unawaited(_loadHistory());
+                                unawaited(history.loadToday());
+                              },
                         icon: const Icon(Icons.refresh_rounded, size: 18),
                         label: const Text('Refresh'),
                       ),
                     ),
                     const SizedBox(height: 10),
+                    _buildQuickFilters(theme),
+                    const SizedBox(height: 14),
+                    _buildDateSearch(theme),
+                    const SizedBox(height: 18),
                     ..._buildHistory(theme, records),
                     const SizedBox(height: 16),
                     OutlinedButton.icon(
@@ -522,26 +668,158 @@ class _LocationScreenState extends State<LocationScreen> {
     );
   }
 
+  String? _historySubtitle(List<LocationRecord> records) {
+    final query = widget.historyService.query;
+    final count = records.isEmpty
+        ? null
+        : records.length == 1
+        ? '1 saved place'
+        : '${records.length} saved places';
+    if (query.isRecent) return count;
+    final label = switch (query.filter) {
+      LocationHistoryFilter.customDate || LocationHistoryFilter.customRange => formatRangeLabel(query.range!),
+      _ => query.filter.label,
+    };
+    return count == null ? label : '$label • $count';
+  }
+
+  /// One-tap periods. Each runs a search straight away.
+  Widget _buildQuickFilters(ThemeData theme) {
+    final selected = widget.historyService.query.filter;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Quick Search', style: theme.textTheme.labelLarge),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final filter in LocationHistoryFilter.quick)
+              ChoiceChip(
+                key: ValueKey('history-filter-${filter.name}'),
+                label: Text(filter.label),
+                selected: selected == filter,
+                showCheckmark: false,
+                selectedColor: AppColors.teal.withValues(alpha: 0.18),
+                onSelected: _clearing ? null : (_) => _searchFilter(filter),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  /// A chosen day or range, searched when the user taps "Search History".
+  Widget _buildDateSearch(ThemeData theme) {
+    final chosen = _rangeMode ? _customRange != null : _customDate != null;
+    return AppCard(
+      key: const ValueKey('history-date-search'),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Search by Date', style: theme.textTheme.titleSmall),
+          const SizedBox(height: 12),
+          SegmentedButton<bool>(
+            segments: const [
+              ButtonSegment(value: false, label: Text('Custom Date')),
+              ButtonSegment(value: true, label: Text('Custom Date Range')),
+            ],
+            selected: {_rangeMode},
+            showSelectedIcon: false,
+            onSelectionChanged: (value) => setState(() {
+              _rangeMode = value.first;
+              _customError = null;
+            }),
+          ),
+          const SizedBox(height: 12),
+          if (_rangeMode)
+            Row(
+              children: [
+                Expanded(child: _dateField(theme, 'From', _customRange?.start, _pickRange, key: 'history-from')),
+                const SizedBox(width: 10),
+                Expanded(child: _dateField(theme, 'To', _customRange?.end, _pickRange, key: 'history-to')),
+              ],
+            )
+          else
+            _dateField(theme, 'Date', _customDate, _pickDate, key: 'history-date'),
+          if (_customError != null) ...[
+            const SizedBox(height: 8),
+            Text(_customError!, style: theme.textTheme.bodySmall?.copyWith(color: AppColors.danger)),
+          ],
+          const SizedBox(height: 12),
+          FilledButton.icon(
+            onPressed: chosen && !_clearing && _customError == null ? _searchCustom : null,
+            icon: const Icon(Icons.search_rounded),
+            label: const Text('Search History'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _dateField(ThemeData theme, String label, DateTime? value, VoidCallback onTap, {required String key}) {
+    return InkWell(
+      key: ValueKey(key),
+      onTap: _clearing ? null : onTap,
+      borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: label,
+          suffixIcon: const Icon(Icons.calendar_month_rounded),
+        ),
+        child: Text(
+          value == null ? 'Select date' : formatShortDate(value),
+          style: value == null
+              ? theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)
+              : theme.textTheme.bodyLarge,
+        ),
+      ),
+    );
+  }
+
   List<Widget> _buildHistory(ThemeData theme, List<LocationRecord> records) {
-    if (_historyLoading && records.isEmpty) {
+    final history = widget.historyService;
+    final query = history.query;
+    final error = history.error;
+    if (history.loading && records.isEmpty) {
       return const [
         Center(
           child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator()),
         ),
       ];
     }
+
+    // Grouped by local calendar day, keeping the order the server returned.
+    final days = <DateTime, List<LocationRecord>>{};
+    for (final record in records) {
+      (days[DateUtils.dateOnly(record.capturedAt)] ??= []).add(record);
+    }
+
+    var index = 0;
     return [
-      if (_historyError != null)
+      if (history.loading) const LinearProgressIndicator(minHeight: 2),
+      if (error != null)
         Padding(
           padding: const EdgeInsets.only(bottom: 10),
           child: InfoBanner(
+            key: ValueKey('history-error-${error.kind.name}'),
             tone: BannerTone.danger,
-            message: Text('Could not load your location history: $_historyError'),
+            icon: switch (error.kind) {
+              LocationHistoryErrorKind.noConnection => Icons.wifi_off_rounded,
+              LocationHistoryErrorKind.serverUnavailable => Icons.cloud_off_rounded,
+              LocationHistoryErrorKind.invalidDate => Icons.event_busy_rounded,
+              LocationHistoryErrorKind.notAllowed => Icons.lock_outline_rounded,
+              LocationHistoryErrorKind.other => Icons.error_outline_rounded,
+            },
+            message: Text('Could not load your location history: ${error.message}'),
           ),
         ),
-      if (records.isEmpty && _historyError == null)
+      if (records.isEmpty && error == null && !history.loading)
         FadeSlideIn(
           child: AppCard(
+            key: const ValueKey('history-empty'),
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 26),
             child: Column(
               children: [
@@ -552,10 +830,16 @@ class _LocationScreenState extends State<LocationScreen> {
                   child: const Icon(Icons.route_rounded, size: 30, color: AppColors.teal),
                 ),
                 const SizedBox(height: 12),
-                Text('No location history yet.', style: theme.textTheme.titleSmall),
+                Text(
+                  query.isRecent ? 'No location history yet.' : 'No location history found.',
+                  style: theme.textTheme.titleSmall,
+                ),
                 const SizedBox(height: 4),
                 Text(
-                  'Your saved locations will appear here after you get your current location.',
+                  query.isRecent
+                      ? 'Your saved locations will appear here after you get your current location '
+                          'or switch on Automatic Location History.'
+                      : 'No saved locations were found for ${formatRangeLabel(query.range!)}.',
                   textAlign: TextAlign.center,
                   style: theme.textTheme.bodySmall,
                 ),
@@ -563,19 +847,52 @@ class _LocationScreenState extends State<LocationScreen> {
             ),
           ),
         ),
-      for (final (i, record) in records.indexed)
-        FadeSlideIn(
-          index: i.clamp(0, 8),
-          child: _buildHistoryItem(theme, record, first: i == 0, last: i == records.length - 1),
+      if (history.hasMore)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: InfoBanner(
+            key: const ValueKey('history-more'),
+            tone: BannerTone.warning,
+            icon: Icons.filter_list_rounded,
+            message: Text(
+              query.isRecent
+                  ? 'Showing your $maxHistoryResults most recent saved locations.'
+                  : 'Showing the first $maxHistoryResults saved locations. Choose a shorter period to see the rest.',
+            ),
+          ),
         ),
+      for (final MapEntry(key: day, value: dayRecords) in days.entries) ...[
+        Padding(
+          key: ValueKey('history-day-${formatApiDate(day)}'),
+          padding: const EdgeInsets.only(top: 6, bottom: 8),
+          child: Row(
+            children: [
+              const Icon(Icons.calendar_today_rounded, size: 16, color: AppColors.teal),
+              const SizedBox(width: 8),
+              Text(formatLongDate(day), style: theme.textTheme.titleSmall),
+            ],
+          ),
+        ),
+        for (final (i, record) in dayRecords.indexed)
+          FadeSlideIn(
+            index: (index++).clamp(0, 8),
+            child: _buildHistoryItem(theme, record, first: i == 0, last: i == dayRecords.length - 1),
+          ),
+      ],
     ];
   }
 
   /// One stop on the history timeline: a rail with a dot on the left, the place on the right.
   Widget _buildHistoryItem(ThemeData theme, LocationRecord record, {required bool first, required bool last}) {
     final coordinates = '${formatCoordinate(record.latitude)}, ${formatCoordinate(record.longitude)}';
-    final when = '${formatCapturedAt(record.capturedAt)} • Accuracy: ${formatAccuracy(record.accuracy)}';
+    final when = '${formatClock(record.capturedAt)} • Accuracy: ${formatAccuracy(record.accuracy)}';
     final place = record.placeName;
+    // The device's full address, when it says more than the place and area lines already do.
+    final address = record.address;
+    final showAddress = place != null &&
+        address != null &&
+        address != joinParts([place, record.areaLine]) &&
+        address != record.areaLine;
     final railColor = theme.colorScheme.outlineVariant;
     return IntrinsicHeight(
       child: Row(
@@ -611,26 +928,21 @@ class _LocationScreenState extends State<LocationScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(place ?? coordinates, style: theme.textTheme.titleMedium),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: Text(place ?? coordinates, style: theme.textTheme.titleMedium)),
+                        const SizedBox(width: 8),
+                        _sourceChip(theme, record),
+                      ],
+                    ),
                     if (place != null && record.areaLine != null)
                       Text(record.areaLine!, style: theme.textTheme.bodyMedium),
                     if (place == null) Text('Place name unavailable', style: theme.textTheme.bodySmall),
                     const SizedBox(height: 8),
-                    if (place != null)
-                      Row(
-                        children: [
-                          Icon(Icons.explore_outlined, size: 14, color: theme.colorScheme.onSurfaceVariant),
-                          const SizedBox(width: 6),
-                          Expanded(child: Text(coordinates, style: theme.textTheme.bodySmall)),
-                        ],
-                      ),
-                    Row(
-                      children: [
-                        Icon(Icons.schedule_rounded, size: 14, color: theme.colorScheme.onSurfaceVariant),
-                        const SizedBox(width: 6),
-                        Expanded(child: Text(when, style: theme.textTheme.bodySmall)),
-                      ],
-                    ),
+                    if (showAddress) _detail(theme, Icons.home_work_outlined, address),
+                    if (place != null) _detail(theme, Icons.explore_outlined, coordinates),
+                    _detail(theme, Icons.schedule_rounded, when),
                   ],
                 ),
               ),
@@ -638,6 +950,283 @@ class _LocationScreenState extends State<LocationScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  /// "Auto" or "Manual", so the user can tell how each place was saved.
+  Widget _sourceChip(ThemeData theme, LocationRecord record) {
+    final color = record.isAutomatic ? AppColors.violet : AppColors.teal;
+    return Container(
+      key: ValueKey('source-${record.id}'),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(20)),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(record.isAutomatic ? Icons.route_rounded : Icons.touch_app_rounded, size: 12, color: color),
+          const SizedBox(width: 4),
+          Text(
+            record.isAutomatic ? 'Auto' : 'Manual',
+            style: theme.textTheme.labelSmall?.copyWith(color: color, fontWeight: FontWeight.w600),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAutomaticCard(ThemeData theme) {
+    final tracking = widget.trackingService;
+    final state = describeTracking(tracking);
+    final status = tracking.status;
+    final issue = tracking.issue;
+    final working = tracking.busy || status == AutomaticTrackingStatus.starting;
+
+    final (String? help, List<(String, VoidCallback)> actions) = switch (status) {
+      AutomaticTrackingStatus.permissionRequired => (
+        switch (issue) {
+          TrackingIssue.backgroundPermission =>
+            'Open Settings, then Permissions › Location, and choose "Allow all the time" for Child Assist.',
+          TrackingIssue.restricted => 'Location access is restricted on this device and cannot be changed from the app.',
+          _ => 'Allow location access for Child Assist to continue.',
+        },
+        [
+          if (issue != TrackingIssue.restricted) ('Open Settings', () => unawaited(tracking.openAppSettings())),
+          if (issue == TrackingIssue.locationPermission) ('Try Again', () => unawaited(tracking.enable())),
+        ],
+      ),
+      AutomaticTrackingStatus.paused => (
+        'Turn on Location on your device to continue.',
+        [('Open Location Settings', () => unawaited(widget.locationService.openLocationSettings()))],
+      ),
+      AutomaticTrackingStatus.error when issue != TrackingIssue.unsupported => (
+        null,
+        [('Try Again', () => unawaited(tracking.enable()))],
+      ),
+      _ => (null, const <(String, VoidCallback)>[]),
+    };
+
+    return AppCard(
+      key: const ValueKey('automatic-tracking-card'),
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const IconBadge(icon: Icons.route_rounded, gradient: AppGradients.location, size: 44),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Automatic Location History', style: theme.textTheme.titleSmall),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Automatically save significant places you visit so Child Assist can show your travel '
+                      'history later.',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Switch(
+                key: const ValueKey('automatic-tracking-switch'),
+                value: tracking.enabled,
+                activeThumbColor: Colors.white,
+                activeTrackColor: AppColors.teal,
+                onChanged: working || _clearing || (!tracking.isSupported && !tracking.enabled)
+                    ? null
+                    : _onTrackingSwitch,
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: state.color.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+            ),
+            child: Row(
+              children: [
+                if (working)
+                  const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                else
+                  Icon(state.icon, size: 18, color: state.color),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text.rich(
+                    TextSpan(children: [
+                      TextSpan(text: 'Status: ', style: theme.textTheme.bodyMedium),
+                      TextSpan(
+                        text: state.label,
+                        style: theme.textTheme.bodyMedium?.copyWith(color: state.color, fontWeight: FontWeight.w600),
+                      ),
+                    ]),
+                    key: const ValueKey('automatic-tracking-status'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (state.detail != null && status != AutomaticTrackingStatus.active) ...[
+            const SizedBox(height: 10),
+            Text(state.detail!, style: theme.textTheme.bodyMedium),
+          ],
+          if (help != null) ...[
+            const SizedBox(height: 6),
+            Text(help, style: theme.textTheme.bodySmall),
+          ],
+          if (actions.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final (label, onPressed) in actions)
+                  FilledButton.tonal(
+                    style: FilledButton.styleFrom(minimumSize: const Size(0, 40)),
+                    onPressed: working ? null : onPressed,
+                    child: Text(label),
+                  ),
+              ],
+            ),
+          ],
+          if (tracking.isActive && tracking.notificationsBlocked) ...[
+            const SizedBox(height: 10),
+            Text(
+              'Notifications are off for Child Assist, so the tracking notification is hidden from the '
+              'notification shade. Android still lists Child Assist as an active app while it tracks.',
+              style: theme.textTheme.bodySmall,
+            ),
+          ],
+          if (tracking.pendingUploads > 0) ...[
+            const SizedBox(height: 10),
+            Row(
+              key: const ValueKey('automatic-tracking-pending'),
+              children: [
+                const Icon(Icons.cloud_upload_outlined, size: 16, color: AppColors.inkMuted),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    tracking.pendingUploads == 1
+                        ? '1 place is waiting to be uploaded. It will be sent when you are back online.'
+                        : '${tracking.pendingUploads} places are waiting to be uploaded. They will be sent '
+                              'when you are back online.',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ),
+              ],
+            ),
+          ],
+          if (tracking.enabled) ...[
+            const SizedBox(height: 10),
+            Text(
+              'Automatic location history may use additional battery. If your phone stops it in the '
+              "background, check Child Assist's battery settings.",
+              style: theme.textTheme.bodySmall,
+            ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => unawaited(tracking.openAppSettings()),
+                icon: const Icon(Icons.battery_saver_outlined, size: 18),
+                label: const Text('App & battery settings'),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Today's places, manual and automatic, in the order they were saved.
+  List<Widget> _buildTodayTravel(ThemeData theme) {
+    final history = widget.historyService;
+    final records = history.todayRecords;
+    final error = history.todayError;
+    return [
+      SectionTitle(
+        "Today's Travel",
+        subtitle: records.isEmpty ? null : (records.length == 1 ? '1 place' : '${records.length} places'),
+      ),
+      const SizedBox(height: 10),
+      if (history.todayLoading && records.isEmpty)
+        const Center(child: Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator()))
+      else if (error != null)
+        InfoBanner(
+          key: const ValueKey('today-error'),
+          tone: BannerTone.danger,
+          icon: Icons.error_outline_rounded,
+          message: Text("Could not load today's travel: ${error.message}"),
+        )
+      else if (records.isEmpty)
+        AppCard(
+          key: const ValueKey('today-empty'),
+          padding: const EdgeInsets.all(16),
+          child: Text(
+            widget.trackingService.isActive
+                ? 'No places saved today yet. A place appears here after you stay somewhere for a few minutes.'
+                : 'No places saved today. Switch on Automatic Location History, or tap "Get Current Location".',
+            style: theme.textTheme.bodySmall,
+          ),
+        )
+      else
+        AppCard(
+          key: const ValueKey('today-travel'),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Column(
+            children: [
+              for (final (i, record) in records.indexed) ...[
+                if (i > 0) Divider(height: 1, color: theme.colorScheme.outlineVariant),
+                Padding(
+                  key: ValueKey('today-${record.id}'),
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(
+                        width: 74,
+                        child: Text(formatClock(record.capturedAt), style: theme.textTheme.labelLarge),
+                      ),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(record.placeName ?? 'Location unavailable', style: theme.textTheme.titleSmall),
+                            Text(
+                              record.placeName == null
+                                  ? '${formatCoordinate(record.latitude)}, ${formatCoordinate(record.longitude)}'
+                                  : (record.areaLine ?? ''),
+                              style: theme.textTheme.bodySmall,
+                            ),
+                          ],
+                        ),
+                      ),
+                      _sourceChip(theme, record),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+    ];
+  }
+
+  Widget _detail(ThemeData theme, IconData icon, String text) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Icon(icon, size: 14, color: theme.colorScheme.onSurfaceVariant),
+        ),
+        const SizedBox(width: 6),
+        Expanded(child: Text(text, style: theme.textTheme.bodySmall)),
+      ],
     );
   }
 
@@ -661,13 +1250,19 @@ String formatUpdated(DateTime time, {DateTime? now}) {
   return formatCapturedAt(time, now: now);
 }
 
+/// "10:30 AM", in local time.
+String formatClock(DateTime time) {
+  final local = time.toLocal();
+  final hour = local.hour % 12 == 0 ? 12 : local.hour % 12;
+  return '$hour:${local.minute.toString().padLeft(2, '0')} ${local.hour < 12 ? 'AM' : 'PM'}';
+}
+
 /// "Today, 10:30 AM", "Yesterday, 9:05 PM" or "3 Oct 2026, 8:00 AM", in local time.
 String formatCapturedAt(DateTime time, {DateTime? now}) {
   final local = time.toLocal();
   final today = DateUtils.dateOnly(now ?? DateTime.now());
   final day = DateUtils.dateOnly(local);
-  final hour = local.hour % 12 == 0 ? 12 : local.hour % 12;
-  final clock = '$hour:${local.minute.toString().padLeft(2, '0')} ${local.hour < 12 ? 'AM' : 'PM'}';
+  final clock = formatClock(local);
 
   final dayDiff = today.difference(day).inDays;
   if (dayDiff == 0) return 'Today, $clock';

@@ -27,7 +27,13 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Child Assist uses the camera only when you choose a feature that takes a photo.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Child Assist uses your location only while you are using a location feature in the app.</string>
+	<string>Child Assist uses your location when you tap Get Current Location, and for Automatic Location History if you switch it on.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>If you switch on Automatic Location History, Child Assist saves significant places you visit, even when the app is closed, so it can show your travel history. You can turn it off at any time in the Location tab.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Child Assist uses your microphone only when you tap the voice button, so it can understand what you say.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

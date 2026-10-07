@@ -48,8 +48,9 @@ post_install do |installer|
         'PERMISSION_CAMERA=1',
         'PERMISSION_MICROPHONE=1',
         'PERMISSION_PHOTOS=1',
-        # Foreground ("when in use") location only; no background location.
-        'PERMISSION_LOCATION_WHENINUSE=1',
+        # Location: "when in use" for Get Current Location, plus "always" for Automatic Location
+        # History (requested only after the user switches it on).
+        'PERMISSION_LOCATION=1',
         'PERMISSION_NOTIFICATIONS=1',
       ]
     end

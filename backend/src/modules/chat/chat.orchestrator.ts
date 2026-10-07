@@ -1,7 +1,9 @@
 import { generateText, isStepCount, type LanguageModel, type ModelMessage } from "ai";
 import { HttpError } from "../../lib/http-error";
+import type { UserZone } from "../../lib/local-dates";
 import { discardPendingActions } from "./actions/pending-actions";
 import { buildInstructions, identityAnswer, isMeaningful, stripWakeWords } from "./ai/identity";
+import { loadConversationContext } from "./ai/memory";
 import { getChatModels } from "./ai/models";
 import { redactSecrets } from "./ai/redact";
 import { generateTitle } from "./ai/title";
@@ -12,7 +14,6 @@ import {
   deleteConversation,
   deleteMessage,
   getConversation,
-  listMessages,
   renameConversation,
   type ConversationRecord,
   type MessageRecord,
@@ -30,9 +31,9 @@ export const chatSettings = {
   timeoutMs: 45_000,
   /** Model steps per turn: each tool round trip is one step. */
   maxSteps: 6,
-  /** Earlier messages sent to the model for context. */
-  historyLimit: 20,
 };
+// How many earlier messages reach the model (and when older ones are summarised) is configured
+// with CHAT_HISTORY_MESSAGE_LIMIT / CHAT_SUMMARY_BATCH; see ai/memory.ts.
 
 export interface ChatTurnInput {
   conversationId?: string;
@@ -143,12 +144,14 @@ export async function handleChatTurn(userId: string, input: ChatTurnInput): Prom
 
   // 4. Gemini with tools (fallback model on failure); the title is generated alongside.
   const titlePromise = titleFor();
-  const history = await loadHistory(userId, conversationId);
-  const instructions = buildInstructions(new Date(), input.timeZone, input.utcOffsetMinutes);
+  const context = await loadConversationContext(userId, conversationId, models.guardrail ?? models.chat);
+  const history = context.messages;
+  const instructions = buildInstructions(new Date(), input.timeZone, input.utcOffsetMinutes, context.summary);
+  const zone = { timeZone: input.timeZone, utcOffsetMinutes: input.utcOffsetMinutes };
 
   let outcome: { text: string; run: ToolContext["run"] };
   try {
-    outcome = await runWithFallback(userId, conversationId, [models.chat, models.fallback], instructions, history);
+    outcome = await runWithFallback(userId, conversationId, zone, [models.chat, models.fallback], instructions, history);
   } catch (err) {
     await titlePromise?.catch(() => undefined);
     await rollback();
@@ -163,21 +166,10 @@ export async function handleChatTurn(userId: string, input: ChatTurnInput): Prom
   });
 }
 
-async function loadHistory(userId: string, conversationId: string): Promise<ModelMessage[]> {
-  const recent = await listMessages(userId, conversationId, { order: "desc", limit: chatSettings.historyLimit });
-  return recent
-    .reverse()
-    .filter((m) => m.role === ChatMessageRole.CHAT_USER || m.role === ChatMessageRole.CHAT_ASSISTANT)
-    .map((m) =>
-      m.role === ChatMessageRole.CHAT_USER
-        ? { role: "user" as const, content: m.content }
-        : { role: "assistant" as const, content: m.content },
-    );
-}
-
 async function runWithFallback(
   userId: string,
   conversationId: string,
+  zone: UserZone,
   candidates: Array<LanguageModel | undefined>,
   instructions: string,
   messages: ModelMessage[],
@@ -185,7 +177,7 @@ async function runWithFallback(
   let lastError: unknown = new Error("No chat model configured");
   for (const model of candidates) {
     if (!model) continue;
-    const ctx: ToolContext = { userId, conversationId, run: { toolsUsed: [], pendingActions: [], events: [] } };
+    const ctx: ToolContext = { userId, conversationId, zone, run: { toolsUsed: [], pendingActions: [], events: [] } };
     try {
       const result = await generateText({
         model,

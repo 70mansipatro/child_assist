@@ -119,12 +119,24 @@ model UserPermission {
   @@map("user_permissions")
 }
 
-// A device location the user explicitly chose to save ("Get Current Location").
-// Never collected in the background. No device identifiers. The place fields come from the
-// device's own reverse geocoder and may all be null.
+// How a saved location was collected.
+enum LocationSource {
+  // The user tapped "Get Current Location".
+  MANUAL
+  // Saved by Automatic Location History, which the user switched on and the OS allowed
+  // (background location, with a visible notification on Android). Only significant places,
+  // never a continuous track.
+  AUTOMATIC
+}
+
+// A device location saved for the user, either on request or by Automatic Location History.
+// No device identifiers. The place fields come from the device's own reverse geocoder and may
+// all be null.
 model LocationHistory {
   id         String   @id @default(uuid()) @db.Uuid
   userId     String   @map("user_id") @db.Uuid
+  // Rows saved before automatic history existed were all manual, hence the default.
+  source     LocationSource @default(MANUAL)
   latitude   Decimal  @db.Decimal(10, 7)
   longitude  Decimal  @db.Decimal(10, 7)
   // Horizontal accuracy radius in metres, if the device reported one.
@@ -144,6 +156,7 @@ model LocationHistory {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, capturedAt])
+  @@index([userId, source, capturedAt])
   @@map("location_history")
 }
 
@@ -161,6 +174,11 @@ model ChatConversation {
   id        String   @id @default(cuid())
   userId    String   @map("user_id") @db.Uuid
   title     String?  @db.VarChar(255)
+  // Server-only memory for long chats: a short summary of the messages up to and including
+  // summarizedUntil, so the model keeps their context without receiving every message. Written by
+  // the backend (secrets redacted, no places or coordinates) and never returned to the app.
+  summary         String?   @db.Text
+  summarizedUntil DateTime? @map("summarized_until")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 

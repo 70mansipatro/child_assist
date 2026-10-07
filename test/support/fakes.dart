@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:geocoding/geocoding.dart' show Placemark;
 
@@ -17,6 +18,8 @@ import 'package:child_assist/features/auth/services/google_auth_service.dart';
 import 'package:child_assist/features/chat/services/text_to_speech_service.dart';
 import 'package:child_assist/features/chat/services/voice_input.dart';
 import 'package:child_assist/features/documents/services/document_service.dart';
+import 'package:child_assist/features/location/models/automatic_tracking.dart';
+import 'package:child_assist/features/location/services/background_location_source.dart';
 import 'package:child_assist/features/location/services/location_service.dart';
 import 'package:child_assist/features/photos/services/photo_gallery_service.dart';
 
@@ -79,6 +82,44 @@ class FakeBackend {
 
   /// When set, every /api/location call fails with this status.
   int? locationFailureStatus;
+
+  /// While set and not completed, GET /api/location/history waits for it (to see loading states).
+  Completer<void>? historyGate;
+
+  /// The query parameters of every GET /api/location/history, in order.
+  final List<Map<String, String>> historyQueries = [];
+
+  /// Every POST /api/location body, in order.
+  final List<Map<String, dynamic>> locationPosts = [];
+
+  /// When true, the next POST /api/location is stored but the response is lost (network drop).
+  bool dropNextLocationResponse = false;
+
+  /// Adds a saved location for [userId] directly, as if saved earlier.
+  Map<String, dynamic> seedLocation(
+    String userId,
+    DateTime capturedAt, {
+    String? placeName,
+    String? address,
+    String source = 'MANUAL',
+    double latitude = 20.2961,
+    double longitude = 85.8245,
+  }) {
+    final record = <String, dynamic>{
+      'id': 'loc${_nextLocationId++}',
+      'latitude': latitude,
+      'longitude': longitude,
+      'accuracy': 10,
+      for (final key in placeKeys) key: null,
+      'placeName': placeName,
+      'address': address,
+      'city': placeName == null ? null : 'Bhubaneswar',
+      'capturedAt': capturedAt.toUtc().toIso8601String(),
+      'source': source,
+    };
+    (locations[userId] ??= []).add(record);
+    return record;
+  }
 
   /// userId -> conversations (JSON as the server returns them, plus their 'messages').
   final Map<String, List<Map<String, dynamic>>> chats = {};
@@ -221,6 +262,7 @@ class FakeBackend {
     GoogleAuthService? googleAuthService,
     LocationProvider? locationProvider,
     PlaceLookup? placeLookup,
+    BackgroundLocationSource? backgroundLocationSource,
     PhotoLibrary? photoLibrary,
     DocumentPlatform? documentPlatform,
     VoiceInput? voiceInput,
@@ -234,6 +276,7 @@ class FakeBackend {
         permissionService: permissionService,
         locationProvider: locationProvider ?? FakeLocationProvider(),
         placeLookup: placeLookup ?? FakePlaceLookup(),
+        backgroundLocationSource: backgroundLocationSource ?? FakeBackgroundLocationSource(),
         photoLibrary: photoLibrary ?? FakePhotoLibrary(),
         documentPlatform: documentPlatform ?? FakeDocumentPlatform(),
         voiceInput: voiceInput ?? FakeVoiceInput(),
@@ -465,7 +508,10 @@ class FakeBackend {
       return _json(200, {'permission': permission, 'status': status});
     }
 
-    if (path.startsWith('/api/location')) return _handleLocation(req, userId);
+    if (path.startsWith('/api/location')) {
+      if (path == '/api/location/history' && req.method == 'GET') await historyGate?.future;
+      return _handleLocation(req, userId);
+    }
     if (path.startsWith('/api/chat')) return _handleChat(req, userId);
 
     return _json(404, {'message': 'Not found'});
@@ -480,9 +526,29 @@ class FakeBackend {
 
     if (path == '/api/location' && req.method == 'POST') {
       final body = jsonDecode(req.body) as Map<String, dynamic>;
+      locationPosts.add(body);
+      const allowed = {'latitude', 'longitude', 'accuracy', 'capturedAt', 'source', ...placeKeys};
+      if (body.keys.any((k) => !allowed.contains(k))) return _json(400, {'message': 'Validation failed'});
       final lat = body['latitude'], lng = body['longitude'];
       if (lat is! num || lat.abs() > 90) return _json(400, {'message': 'Validation failed'});
       if (lng is! num || lng.abs() > 180) return _json(400, {'message': 'Validation failed'});
+      final source = body['source'] ?? 'MANUAL';
+      if (source != 'MANUAL' && source != 'AUTOMATIC') return _json(400, {'message': 'Validation failed'});
+      // Like the server: an automatic point within 100 m and 5 minutes of one already saved is skipped.
+      if (source == 'AUTOMATIC') {
+        final at = DateTime.parse(body['capturedAt'] as String);
+        final point = TrackedPoint(latitude: lat.toDouble(), longitude: lng.toDouble(), capturedAt: at);
+        final duplicate = mine.any((l) {
+          final other = TrackedPoint(
+            latitude: (l['latitude'] as num).toDouble(),
+            longitude: (l['longitude'] as num).toDouble(),
+            capturedAt: DateTime.parse(l['capturedAt'] as String),
+          );
+          return at.difference(other.capturedAt).abs() < const Duration(minutes: 5) &&
+              distanceBetween(point, other) < 100;
+        });
+        if (duplicate) return _json(200, {'saved': false, 'reason': 'duplicate'});
+      }
       final record = {
         'id': 'loc${_nextLocationId++}',
         'latitude': lat,
@@ -490,13 +556,39 @@ class FakeBackend {
         'accuracy': body['accuracy'],
         for (final key in placeKeys) key: body[key],
         'capturedAt': body['capturedAt'],
+        'source': source,
       };
       mine.add(record);
-      return _json(201, {'location': record});
+      if (dropNextLocationResponse) {
+        dropNextLocationResponse = false;
+        throw http.ClientException('Connection reset');
+      }
+      return _json(201, {'saved': true, 'location': record});
     }
     if (path == '/api/location/history' && req.method == 'GET') {
-      final limit = int.tryParse(req.url.queryParameters['limit'] ?? '50') ?? 50;
-      return _json(200, {'locations': mine.reversed.take(limit).toList()});
+      final query = req.url.queryParameters;
+      historyQueries.add(Map.of(query));
+      if (query.containsKey('userId')) return _json(400, {'message': 'Validation failed'});
+      // Like the server: at most 50, and a date search covers whole local days, oldest first.
+      final limit = math.min(int.tryParse(query['limit'] ?? '50') ?? 50, 50);
+      var matches = mine.reversed.toList();
+      final source = query['source'];
+      if (source != null) matches = matches.where((l) => l['source'] == source).toList();
+      final start = query['startDate'];
+      if (start != null) {
+        final end = query['endDate'] ?? start;
+        final days = RegExp(r'^\d{4}-\d{2}-\d{2}$');
+        if (!days.hasMatch(start) || !days.hasMatch(end)) {
+          return _json(400, {'message': 'Invalid date. Use the format YYYY-MM-DD.'});
+        }
+        if (end.compareTo(start) < 0) return _json(400, {'message': 'Invalid date range.'});
+        final offset = Duration(minutes: int.parse(query['utcOffsetMinutes'] ?? '0'));
+        String localDay(Map<String, dynamic> l) =>
+            DateTime.parse(l['capturedAt'] as String).toUtc().add(offset).toIso8601String().substring(0, 10);
+        matches = matches.where((l) => localDay(l).compareTo(start) >= 0 && localDay(l).compareTo(end) <= 0).toList()
+          ..sort((a, b) => (a['capturedAt'] as String).compareTo(b['capturedAt'] as String));
+      }
+      return _json(200, {'locations': matches.take(limit).toList(), 'hasMore': matches.length > limit});
     }
     if (path == '/api/location/history' && req.method == 'DELETE') {
       final deleted = mine.length;
@@ -688,6 +780,79 @@ class FakePermissionService extends PermissionService {
     settingsOpened++;
     return true;
   }
+
+  /// "Allow all the time" location: the OS state, and what the user picks when asked.
+  PermissionState backgroundLocation = PermissionState.denied;
+  PermissionState onBackgroundRequest = PermissionState.granted;
+  int backgroundDialogs = 0;
+
+  @override
+  Future<PermissionState> backgroundLocationStatus() async {
+    calls.add('status backgroundLocation');
+    return backgroundLocation;
+  }
+
+  @override
+  Future<PermissionState> requestBackgroundLocationPermission() async {
+    calls.add('request backgroundLocation');
+    if (backgroundLocation != PermissionState.denied) return backgroundLocation;
+    backgroundDialogs++;
+    return backgroundLocation = onBackgroundRequest;
+  }
+
+  /// Grants foreground and background location, as a user who chose "Allow all the time".
+  void allowLocationAllTheTime() {
+    os[AppPermission.location] = PermissionState.granted;
+    backgroundLocation = PermissionState.granted;
+  }
+}
+
+/// Stands in for background location (geolocator's foreground service). Tests push readings with
+/// [emit]; [listening] tells whether the app is collecting (and the Android notification showing).
+class FakeBackgroundLocationSource implements BackgroundLocationSource {
+  @override
+  bool isSupported = true;
+  bool serviceEnabled = true;
+
+  StreamController<TrackedPoint>? _controller;
+  int starts = 0;
+
+  /// What the next confirmation reading returns; null makes it fail.
+  TrackedPoint? fresh;
+  int freshReads = 0;
+
+  bool get listening => _controller?.hasListener ?? false;
+
+  @override
+  Future<bool> isServiceEnabled() async => serviceEnabled;
+
+  @override
+  Stream<TrackedPoint> positions(AutomaticTrackingConfig config) {
+    starts++;
+    final controller = StreamController<TrackedPoint>();
+    controller.onCancel = () {
+      if (identical(_controller, controller)) _controller = null;
+    };
+    _controller = controller;
+    return controller.stream;
+  }
+
+  @override
+  Future<TrackedPoint> currentPosition(AutomaticTrackingConfig config) async {
+    freshReads++;
+    final point = fresh;
+    if (point == null) throw TimeoutException('no fix');
+    return point;
+  }
+
+  void emit(TrackedPoint point) {
+    final controller = _controller;
+    if (controller == null) throw StateError('not listening');
+    controller.add(point);
+  }
+
+  /// The platform ends the stream with an error (e.g. permission revoked in Settings).
+  void fail(Object error) => _controller?.addError(error);
 }
 
 /// Stands in for the GPS hardware.

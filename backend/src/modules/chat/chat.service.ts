@@ -172,6 +172,53 @@ export async function listMessages(
   });
 }
 
+export interface ConversationMemory {
+  summary: string | null;
+  /** createdAt of the last message the summary covers; later messages are not in it. */
+  summarizedUntil: Date | null;
+}
+
+/** The server-only summary of the user's conversation, or 404. Never sent to the app. */
+export async function getConversationMemory(userId: string, id: string): Promise<ConversationMemory> {
+  const row = await prisma.chatConversation.findFirst({
+    where: { id, userId },
+    select: { summary: true, summarizedUntil: true },
+  });
+  if (!row) throw notFound();
+  return row;
+}
+
+/** The user's own user and assistant messages after [after] (all when null), oldest first, at most [limit] of the newest. */
+export async function listDialogueSince(
+  userId: string,
+  conversationId: string,
+  after: Date | null,
+  limit: number,
+): Promise<MessageRecord[]> {
+  const rows = await prisma.chatMessage.findMany({
+    where: {
+      conversationId,
+      conversation: { userId },
+      role: { in: [ChatMessageRole.CHAT_USER, ChatMessageRole.CHAT_ASSISTANT] },
+      ...(after ? { createdAt: { gt: after } } : {}),
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: limit,
+    select: messageSelect,
+  });
+  return rows.reverse();
+}
+
+/** Stores a new summary for the user's conversation. A conversation deleted meanwhile is ignored. */
+export async function saveConversationSummary(
+  userId: string,
+  id: string,
+  summary: string,
+  summarizedUntil: Date,
+): Promise<void> {
+  await prisma.chatConversation.updateMany({ where: { id, userId }, data: { summary, summarizedUntil } });
+}
+
 /**
  * Records that a tool was invoked. Only the fields below are stored: tool arguments and results
  * (locations, contacts, photos, documents, credentials) are never written to this table.

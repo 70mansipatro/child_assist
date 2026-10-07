@@ -73,6 +73,38 @@ class PermissionService {
   Future<PermissionState> photoStatus() => status(AppPermission.photos);
   Future<PermissionState> notificationStatus() => status(AppPermission.notifications);
 
+  /// "Allow all the time" location, needed only for Automatic Location History. Separate from
+  /// [AppPermission.location] (foreground, "while using the app"), which every other location
+  /// feature uses. Status only; no dialog.
+  ///
+  /// Android 9 and below have no separate background permission: there the foreground grant
+  /// covers it, and the plugin reports it as granted. Unavailable on web and desktop.
+  Future<PermissionState> backgroundLocationStatus() async {
+    if (!_isMobile) return PermissionState.unavailable;
+    try {
+      return _map(await ph.Permission.locationAlways.status);
+    } catch (e) {
+      debugPrint('Permission status check failed for background location: $e');
+      return PermissionState.unavailable;
+    }
+  }
+
+  /// Asks for background location. Only call after foreground location is granted and after the
+  /// user has been told why (the OS requires both). On Android 11+ the OS shows the app's location
+  /// settings page, where the user must pick "Allow all the time"; on iOS it offers "Change to
+  /// Always Allow".
+  Future<PermissionState> requestBackgroundLocationPermission() async {
+    if (!_isMobile) return PermissionState.unavailable;
+    try {
+      final current = _map(await ph.Permission.locationAlways.status);
+      if (current != PermissionState.denied) return current;
+      return _map(await ph.Permission.locationAlways.request());
+    } catch (e) {
+      debugPrint('Permission request failed for background location: $e');
+      return PermissionState.unavailable;
+    }
+  }
+
   /// Current state without showing any dialog.
   Future<PermissionState> status(AppPermission permission) async {
     final native = await _nativePermission(permission);

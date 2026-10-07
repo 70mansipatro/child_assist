@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import '../../core/widgets/widgets.dart';
 import '../auth/models/user.dart';
 import '../auth/services/auth_service.dart';
+import '../location/services/automatic_location_tracking_service.dart';
+import '../location/widgets/tracking_status.dart';
 import '../profile/services/profile_photo_service.dart';
 
 /// The Dashboard tab: a greeting, a shortcut into Chat, and cards for the features that do
@@ -20,6 +22,8 @@ class DashboardScreen extends StatelessWidget {
     required this.onOpenDocuments,
     required this.onOpenPermissions,
     required this.onOpenNotifications,
+    this.trackingService,
+    this.onOpenLocation,
   });
 
   /// The signed-in user; the greeting follows it, including name changes made in Profile.
@@ -37,6 +41,10 @@ class DashboardScreen extends StatelessWidget {
   final VoidCallback onOpenDocuments;
   final VoidCallback onOpenPermissions;
   final VoidCallback onOpenNotifications;
+
+  /// Shows the Automatic Location History status card when set; tapping it calls [onOpenLocation].
+  final AutomaticLocationTrackingService? trackingService;
+  final VoidCallback? onOpenLocation;
 
   /// 05:00–11:59 morning, 12:00–17:59 afternoon, otherwise evening (device local time).
   static String timeOfDayGreeting(DateTime time) => switch (time.hour) {
@@ -162,6 +170,18 @@ class DashboardScreen extends StatelessWidget {
               ),
             ),
           ),
+          if (trackingService != null)
+            SliverToBoxAdapter(
+              child: _Constrained(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
+                  child: FadeSlideIn(
+                    index: features.length + 3,
+                    child: AutomaticTrackingStatusCard(service: trackingService!, onTap: onOpenLocation ?? () {}),
+                  ),
+                ),
+              ),
+            ),
           SliverToBoxAdapter(
             child: _Constrained(
               child: Padding(

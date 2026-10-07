@@ -13,6 +13,9 @@ import 'features/chat/services/text_to_speech_service.dart';
 import 'features/chat/services/voice_input.dart';
 import 'features/documents/services/document_service.dart';
 import 'features/location/data/location_api.dart';
+import 'features/location/data/tracking_store.dart';
+import 'features/location/services/automatic_location_tracking_service.dart';
+import 'features/location/services/background_location_source.dart';
 import 'features/location/services/location_history_service.dart';
 import 'features/location/services/location_service.dart';
 import 'features/permissions/data/permissions_api.dart';
@@ -34,6 +37,7 @@ class AppServices {
     required this.permissionOnboardingService,
     required this.locationService,
     required this.locationHistoryService,
+    required this.automaticTrackingService,
     required this.photoGalleryService,
     required this.documentService,
     required this.chatService,
@@ -42,8 +46,8 @@ class AppServices {
   });
 
   /// Wires the real implementations. Tests can swap the HTTP client, storage, Google sign-in, the
-  /// OS permission layer, the location hardware, the geocoder, the photo library, the
-  /// device documents, speech recognition or text-to-speech.
+  /// OS permission layer, the location hardware (foreground and background), the geocoder, the
+  /// photo library, the device documents, speech recognition or text-to-speech.
   factory AppServices.create({
     ApiClient? apiClient,
     TokenStorage? tokenStorage,
@@ -51,6 +55,8 @@ class AppServices {
     PermissionService? permissionService,
     LocationProvider? locationProvider,
     PlaceLookup? placeLookup,
+    BackgroundLocationSource? backgroundLocationSource,
+    TrackingStore? trackingStore,
     PhotoLibrary? photoLibrary,
     DocumentPlatform? documentPlatform,
     VoiceInput? voiceInput,
@@ -66,6 +72,9 @@ class AppServices {
     final permissions = permissionService ?? PermissionService();
     final profileService = ProfileService(api: ProfileApi(client), authService: authService);
     final permissionSyncService = PermissionSyncService(api: PermissionsApi(client), authService: authService);
+    // One device geocoder for both manual and automatic locations.
+    final places = placeLookup ?? NativePlaceLookup();
+    final locationApi = LocationApi(client);
     return AppServices(
       authService: authService,
       profileService: profileService,
@@ -77,10 +86,18 @@ class AppServices {
       locationService: LocationService(
         permissionService: permissions,
         provider: locationProvider,
-        placeLookup: placeLookup,
+        placeLookup: places,
       ),
-      locationHistoryService:
-          LocationHistoryService(api: LocationApi(client), authService: authService),
+      locationHistoryService: LocationHistoryService(api: locationApi, authService: authService),
+      automaticTrackingService: AutomaticLocationTrackingService(
+        authService: authService,
+        api: locationApi,
+        permissionService: permissions,
+        permissionSyncService: permissionSyncService,
+        source: backgroundLocationSource,
+        placeLookup: places,
+        store: trackingStore,
+      ),
       photoGalleryService:
           PhotoGalleryService(permissionService: permissions, library: photoLibrary),
       documentService: DocumentService(authService: authService, platform: documentPlatform),
@@ -105,6 +122,9 @@ class AppServices {
   final PermissionOnboardingService permissionOnboardingService;
   final LocationService locationService;
   final LocationHistoryService locationHistoryService;
+
+  /// Automatic Location History. Follows the signed-in account: stops on logout.
+  final AutomaticLocationTrackingService automaticTrackingService;
   final PhotoGalleryService photoGalleryService;
   final DocumentService documentService;
   final ChatService chatService;

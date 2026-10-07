@@ -3,10 +3,18 @@
     <uses-permission android:name="android.permission.INTERNET"/>
 
     <!-- Runtime permissions. Each is requested only when the user opens the related feature
-         (see lib/core/permissions/permission_service.dart). Foreground use only: no background
-         location, no background microphone. -->
+         (see lib/core/permissions/permission_service.dart). No background microphone. -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <!-- Automatic Location History only. Requested after the user switches it on and reads what is
+         collected (Android 10+ asks separately for "Allow all the time"). While it runs, location is
+         read by geolocator's foreground service (foregroundServiceType="location", declared in the
+         plugin's manifest) with a persistent notification; it stops when the user turns it off or
+         logs out. -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <!-- Android 14+: the type-specific permission for a location foreground service. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <uses-permission android:name="android.permission.CAMERA"/>
     <!-- Photos: Android 13+ uses READ_MEDIA_IMAGES (plus partial "selected photos" access on 14+);

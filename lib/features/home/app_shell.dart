@@ -124,6 +124,8 @@ class _AppShellState extends State<AppShell> {
         onOpenDocuments: _openDocuments,
         onOpenPermissions: _openPermissions,
         onOpenNotifications: _openNotifications,
+        trackingService: services.automaticTrackingService,
+        onOpenLocation: () => _select(AppShell.locationTab),
       ),
       AppShell.chatTab => ChatScreen(
         active: _index == AppShell.chatTab,
@@ -139,6 +141,7 @@ class _AppShellState extends State<AppShell> {
         locationService: services.locationService,
         historyService: services.locationHistoryService,
         permissionSyncService: services.permissionSyncService,
+        trackingService: services.automaticTrackingService,
       ),
       _ => ProfileScreen(
         profileService: services.profileService,

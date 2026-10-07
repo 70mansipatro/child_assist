@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:geocoding/geocoding.dart' show Placemark;
 
 import 'package:child_assist/core/permissions/permission_service.dart';
+import 'package:child_assist/features/location/models/location_history_filter.dart';
 import 'package:child_assist/features/location/models/location_record.dart';
 import 'package:child_assist/features/location/screens/location_screen.dart';
 import 'package:child_assist/features/location/services/location_service.dart';
@@ -319,11 +320,15 @@ void main() {
       expect(find.text('My Location'), findsOneWidget);
       expect(os.dialogsShown, isEmpty);
       expect(gps.reads, 0);
-      expect(find.textContaining('does not track your location continuously'), findsOneWidget);
+      expect(find.textContaining('or automatically while you have Automatic Location History switched on'), findsOneWidget);
+      // Automatic Location History starts off and is never switched on by opening the screen.
+      expect(find.textContaining('Status: Tracking off', findRichText: true), findsOneWidget);
+      expect(os.calls, isNot(contains('request backgroundLocation')));
       expect(currentCard('Tap "Get Current Location" to see your real device location.'), findsOneWidget);
       expect(find.text('No location history yet.'), findsOneWidget);
       expect(find.textContaining('Your saved locations will appear here'), findsOneWidget);
       expect(find.byKey(const ValueKey('location-failure')), findsNothing);
+      await tester.scrollUntilVisible(find.text('Clear Location History'), 200, scrollable: find.byType(Scrollable).first);
       final clear = tester.widget<OutlinedButton>(
           find.ancestor(of: find.text('Clear Location History'), matching: find.bySubtype<OutlinedButton>()));
       expect(clear.onPressed, isNull, reason: 'nothing to clear yet');
@@ -380,7 +385,10 @@ void main() {
       expect(find.descendant(of: first, matching: find.text('Jayadev Vihar')), findsOneWidget);
       expect(find.descendant(of: first, matching: find.text('Bhubaneswar, Odisha, India')), findsOneWidget);
       expect(find.descendant(of: first, matching: find.text('20.2961, 85.8245')), findsOneWidget);
-      expect(find.descendant(of: first, matching: find.textContaining(RegExp(r'^Today, .* • Accuracy: 12 m$'))),
+      // Grouped under today's date; each item shows its time of day.
+      expect(find.byKey(ValueKey('history-day-${formatApiDate(DateTime.now())}')), findsOneWidget);
+      expect(find.text(formatLongDate(DateTime.now())), findsOneWidget);
+      expect(find.descendant(of: first, matching: find.textContaining(RegExp(r'^\d{1,2}:\d{2} [AP]M • Accuracy: 12 m$'))),
           findsOneWidget);
 
       // Refresh Location saves a second record; newest first.

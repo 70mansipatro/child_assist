@@ -47,7 +47,7 @@ const RULES: ReadonlyArray<[GuardrailCategory, RegExp]> = [
   ],
   [
     "other_user_data",
-    /\b(?:other|another|different|all|every)\s+(?:users?|accounts?)\b|\bsomeone\s+else'?s\b|\banother\s+(?:person|kid|child)'s\s+(?:chats?|messages?|locations?|photos?|documents?|profile|data|account)/i,
+    /\b(?:other|another|different|all|every)\s+(?:users?|accounts?)\b|\bsomeone\s+else'?s\b|\banother\s+(?:person|kid|child|user)'s\s+(?:chats?|messages?|locations?|photos?|documents?|profile|data|account|travel|location history|whereabouts)/i,
   ],
   [
     "prompt_injection",

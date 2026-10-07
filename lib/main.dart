@@ -35,15 +35,20 @@ class MyApp extends StatefulWidget {
 class _MyAppState extends State<MyApp> {
   final _navigatorKey = GlobalKey<NavigatorState>();
   late AuthStatus _lastStatus = widget.services.authService.status;
+  late final AppLifecycleListener _lifecycle;
 
   @override
   void initState() {
     super.initState();
     widget.services.authService.addListener(_onAuthChanged);
+    // Back from Settings or the background: Automatic Location History checks the OS again
+    // (stops if a permission was revoked, resumes if it was fixed) and retries unsent places.
+    _lifecycle = AppLifecycleListener(onResume: widget.services.automaticTrackingService.recheck);
   }
 
   @override
   void dispose() {
+    _lifecycle.dispose();
     widget.services.authService.removeListener(_onAuthChanged);
     super.dispose();
   }

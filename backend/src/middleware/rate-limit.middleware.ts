@@ -13,19 +13,32 @@ const windows = new Map<string, Window>();
 // Bounds memory if many addresses send requests: expired windows are dropped once it grows.
 const PRUNE_ABOVE = 10_000;
 
+interface RateLimitOptions {
+  bucket: string;
+  max: number;
+  windowMs: number;
+  /**
+   * Whose count a request uses. Defaults to the client IP. Authenticated routes can count per
+   * account instead (the verified JWT's user), so devices sharing a network don't share a limit.
+   */
+  key?: (req: Request) => string;
+}
+
 /**
  * Allows [max] requests per client IP per [windowMs] for the routes it guards, then answers 429.
  * The limit depends only on the caller, never on the account named in the body, so it reveals
  * nothing about which emails are registered. Routes sharing a [bucket] share one count.
+ * [options] may be a function, read on every request, so the limit can follow live settings.
  */
-export function rateLimit({ bucket, max, windowMs }: { bucket: string; max: number; windowMs: number }) {
+export function rateLimit(options: RateLimitOptions | (() => RateLimitOptions)) {
   return (req: Request, _res: Response, next: NextFunction): void => {
+    const { bucket, max, windowMs, key: keyOf } = typeof options === "function" ? options() : options;
     const now = Date.now();
     if (windows.size > PRUNE_ABOVE) {
       for (const [key, w] of windows) if (w.resetAt <= now) windows.delete(key);
     }
 
-    const key = `${bucket}:${req.ip ?? "unknown"}`;
+    const key = `${bucket}:${keyOf ? keyOf(req) : (req.ip ?? "unknown")}`;
     let w = windows.get(key);
     if (!w || w.resetAt <= now) {
       w = { count: 0, resetAt: now + windowMs };

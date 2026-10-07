@@ -13,6 +13,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { PermissionStatus, PermissionType } from "../generated/prisma/client";
 import { createApp } from "../src/app";
 import { registerVerifiedUser } from "./support/auth";
+import { PERIODS, expectedRange, localInstant, localToday, shiftDays } from "./support/dates";
 import { prisma } from "../src/lib/prisma";
 import { clearPendingActions } from "../src/modules/chat/actions/pending-actions";
 import { setChatModels } from "../src/modules/chat/ai/models";
@@ -337,10 +338,8 @@ describe("chat API: tools and permissions", () => {
     assert.equal(res.status, 201, res.raw);
   }
 
-  const range = () => ({
-    startDate: new Date(Date.now() - 7 * 86_400_000).toISOString(),
-    endDate: new Date(Date.now() + 60_000).toISOString(),
-  });
+  // Local calendar days (no zone in these requests, so UTC days).
+  const range = () => ({ startDate: localToday(0, Date.now() - 7 * 86_400_000), endDate: localToday(0) });
 
   test("location history is blocked without LOCATION permission and audited", async () => {
     await setPermission(userA, PermissionType.LOCATION, PermissionStatus.DENIED);
@@ -380,9 +379,11 @@ describe("chat API: tools and permissions", () => {
     assert.equal(res.json.toolEvents[0].status, "success");
     assert.deepEqual(res.json.toolEvents[0].data.locations, result.data.locations);
     assert.deepEqual(Object.keys(result.data.locations[0]).sort(), [
-      "address", "capturedAt", "city", "country", "latitude", "longitude", "placeName", "state",
+      "address", "capturedAt", "city", "country", "latitude", "localDate", "localTime", "longitude", "placeName", "source",
+      "state",
     ]);
     assert.equal(result.data.locations[0].placeName, "Asha's School");
+    assert.equal(result.data.locations[0].source, "MANUAL");
     assert.ok(!res.raw.includes("Bilal's House"));
   });
 
@@ -800,13 +801,194 @@ describe("chat API: voice transcripts", () => {
   test("a spoken location question still needs LOCATION permission", async () => {
     await setPermission(userA, PermissionType.LOCATION, PermissionStatus.DENIED);
     setChatModels({
-      chat: toolEcho("get_location_history", {
-        startDate: new Date(Date.now() - 86_400_000).toISOString(),
-        endDate: new Date(Date.now() + 60_000).toISOString(),
-      }),
+      chat: toolEcho("get_location_history", { period: "today" }),
     });
     const res = await chat(userA, { message: "where did i go today" });
     assert.equal(res.status, 200, res.raw);
     assert.deepEqual(res.json.toolEvents, [{ kind: "location_history", status: "permission_required", permission: "LOCATION" }]);
+  });
+});
+
+describe("chat API: location history by date", () => {
+  // The phone is in India and sends its offset with every message, as the app does.
+  const IST = 330;
+  let explorer: TestUser;
+  /** placeName -> local date it was captured on. */
+  const savedOn = new Map<string, string>();
+
+  async function ask(user: TestUser, input: Record<string, unknown>, zone: Record<string, unknown> = { utcOffsetMinutes: IST }) {
+    setChatModels({ chat: toolEcho("get_location_history", input) });
+    const res = await chat(user, { message: "Where did I go?", ...zone });
+    assert.equal(res.status, 200, res.raw);
+    const raw = res.json.response as string;
+    return { res, raw, result: raw.startsWith("RESULT ") ? JSON.parse(raw.slice("RESULT ".length)) : null };
+  }
+
+  before(async () => {
+    explorer = await registerUser("Explorer");
+    await setPermission(explorer, PermissionType.LOCATION, PermissionStatus.GRANTED);
+    const today = localToday(IST);
+    const localMidnight = localInstant(today, 0, 0, IST).getTime();
+    // Today's visit sits halfway between local midnight and now, so it is never in the future.
+    const rows: Array<{ placeName: string; capturedAt: Date; day: string }> = [
+      { placeName: "today", capturedAt: new Date((localMidnight + Date.now()) / 2), day: today },
+    ];
+    for (const daysAgo of [1, 2, 3, 6, 8, 13, 20, 40, 75, 200, 380, 500]) {
+      const day = shiftDays(today, -daysAgo);
+      rows.push({ placeName: `d-${daysAgo}`, capturedAt: localInstant(day, 12, 0, IST), day });
+    }
+    await prisma.locationHistory.createMany({
+      data: rows.map((r) => ({
+        userId: explorer.id,
+        latitude: 20.3,
+        longitude: 85.8,
+        placeName: r.placeName,
+        city: "Bhubaneswar",
+        capturedAt: r.capturedAt,
+      })),
+    });
+    for (const r of rows) savedOn.set(r.placeName, r.day);
+  });
+
+  const within = (range: { startDate: string; endDate: string }) =>
+    [...savedOn]
+      .filter(([, day]) => day >= range.startDate && day <= range.endDate)
+      .sort((a, b) => a[1].localeCompare(b[1]))
+      .map(([name]) => name);
+
+  test("the model is told the user's local date and the location rules", async () => {
+    const chatModel = model(() => text("ok"));
+    setChatModels({ chat: chatModel });
+    await chat(explorer, { message: "Where did I go yesterday?", utcOffsetMinutes: IST });
+    const system = chatModel.calls[0].system;
+    assert.match(system, new RegExp(`local date today is ${localToday(IST)}`));
+    assert.match(system, /Weeks run Monday to Sunday/);
+    assert.match(system, /Never invent, guess or add places/);
+    assert.match(system, /I can only show locations that have already been saved/);
+    assert.match(system, /05\/10\/2026 and 05-10-2026 are 5 October 2026/);
+  });
+
+  for (const period of PERIODS) {
+    test(`period ${period} resolves in the user's time zone and returns only those days`, async () => {
+      const { result } = await ask(explorer, { period });
+      const range = expectedRange(period, localToday(IST));
+      assert.equal(result.success, true, JSON.stringify(result));
+      assert.equal(result.data.period, period);
+      assert.equal(result.data.startDate, range.startDate);
+      assert.equal(result.data.endDate, range.endDate);
+      const names = result.data.locations.map((l: { placeName: string }) => l.placeName);
+      assert.deepEqual(names, within(range));
+      assert.equal(result.data.count, names.length);
+      assert.equal(result.data.hasMore, false);
+      for (const l of result.data.locations) {
+        assert.equal(l.localDate, savedOn.get(l.placeName));
+        assert.ok(!("id" in l), "no database ids");
+      }
+    });
+  }
+
+  test("an exact date and a date range", async () => {
+    const day = savedOn.get("d-3")!;
+    const exact = await ask(explorer, { startDate: day, endDate: day });
+    assert.deepEqual(exact.result.data.locations.map((l: any) => l.placeName), ["d-3"]);
+    assert.equal(exact.result.data.locations[0].localTime, "12:00 PM");
+    const single = await ask(explorer, { startDate: day });
+    assert.equal(single.result.data.endDate, day, "endDate defaults to startDate");
+
+    const range = await ask(explorer, { startDate: savedOn.get("d-8")!, endDate: savedOn.get("d-2")! });
+    assert.deepEqual(range.result.data.locations.map((l: any) => l.placeName), ["d-8", "d-6", "d-3", "d-2"]);
+  });
+
+  test("times are the user's local times, by offset or by time zone name", async () => {
+    const local = await registerUser("Local");
+    await setPermission(local, PermissionType.LOCATION, PermissionStatus.GRANTED);
+    // 10:32 AM in India on 5 October 2025, and 00:30 on the same local day (still 4 Oct in UTC).
+    await prisma.locationHistory.createMany({
+      data: [
+        { userId: local.id, latitude: 1, longitude: 1, placeName: "Patia", capturedAt: new Date("2025-10-05T05:02:00Z") },
+        { userId: local.id, latitude: 1, longitude: 1, placeName: "Early", capturedAt: new Date("2025-10-04T19:00:00Z") },
+      ],
+    });
+    for (const zone of [{ utcOffsetMinutes: IST }, { timeZone: "Asia/Kolkata" }]) {
+      const { result } = await ask(local, { startDate: "2025-10-05" }, zone);
+      assert.deepEqual(
+        result.data.locations.map((l: any) => [l.placeName, l.localTime]),
+        [["Early", "12:30 AM"], ["Patia", "10:32 AM"]],
+        JSON.stringify(zone),
+      );
+    }
+  });
+
+  test("a future date returns no history and says why", async () => {
+    const tomorrow = shiftDays(localToday(IST), 1);
+    const { result } = await ask(explorer, { startDate: tomorrow });
+    assert.equal(result.success, true);
+    assert.equal(result.data.future, true);
+    assert.equal(result.data.count, 0);
+    assert.deepEqual(result.data.locations, []);
+    assert.match(result.data.note, /already saved/);
+  });
+
+  test("a day with no saved locations returns an empty list, not invented places", async () => {
+    const { result, res } = await ask(explorer, { startDate: "2001-01-01", endDate: "2001-01-31" });
+    assert.equal(result.success, true);
+    assert.equal(result.data.count, 0);
+    assert.deepEqual(result.data.locations, []);
+    assert.equal(result.data.future, undefined);
+    assert.deepEqual(res.json.toolEvents, [{ kind: "location_history", status: "success", data: result.data }]);
+  });
+
+  test("more than 50 locations: 50 are returned and the cap is reported", async () => {
+    const busy = await registerUser("Busy Chat");
+    await setPermission(busy, PermissionType.LOCATION, PermissionStatus.GRANTED);
+    const day = shiftDays(localToday(IST), -1);
+    await prisma.locationHistory.createMany({
+      data: Array.from({ length: 55 }, (_, i) => ({
+        userId: busy.id,
+        latitude: 1,
+        longitude: 1,
+        placeName: `stop-${i}`,
+        capturedAt: localInstant(day, 8, i, IST),
+      })),
+    });
+    const { result } = await ask(busy, { period: "yesterday" });
+    assert.equal(result.data.count, 50);
+    assert.equal(result.data.hasMore, true);
+    assert.match(result.data.note, /More than 50/);
+    assert.equal(result.data.locations[0].placeName, "stop-0");
+
+    const capped = await ask(busy, { period: "yesterday", limit: 500 });
+    assert.match(capped.raw, /InvalidToolInputError/, "a limit over 50 is refused by the schema");
+  });
+
+  test("bad date arguments are refused before any data is read", async () => {
+    for (const input of [
+      {},
+      { period: "today", startDate: localToday(IST) },
+      { startDate: "2026-10-07", endDate: "2026-10-01" },
+      { startDate: "2024-01-01", endDate: "2025-06-01" },
+    ]) {
+      const { raw } = await ask(explorer, input);
+      assert.match(raw, /INVALID_ARGUMENTS/, JSON.stringify(input));
+    }
+    for (const input of [
+      { startDate: "2026-10-05T00:00:00Z" },
+      { startDate: "05/10/2026" },
+      { startDate: "2026-02-30" },
+      { period: "tomorrow" },
+      { period: "today", userId: explorer.id },
+    ]) {
+      const { raw, res } = await ask(explorer, input);
+      assert.match(raw, /InvalidToolInputError/, JSON.stringify(input));
+      assert.deepEqual(res.json.toolsUsed, []);
+    }
+  });
+
+  test("another user's question never returns this user's places", async () => {
+    const stranger = await registerUser("Stranger");
+    await setPermission(stranger, PermissionType.LOCATION, PermissionStatus.GRANTED);
+    const { result, res } = await ask(stranger, { period: "this_year" });
+    assert.equal(result.data.count, 0);
+    assert.doesNotMatch(res.raw, /d-1|Bhubaneswar/);
   });
 });

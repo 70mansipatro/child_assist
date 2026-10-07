@@ -6,20 +6,27 @@ import {
   deleteHistoryQuerySchema,
   historyQuerySchema,
   locationParamsSchema,
+  resolveHistoryQuery,
 } from "./location.validation";
 
 // The user is always the one identified by the verified JWT, never an ID from the request.
 
 export async function saveLocation(req: Request, res: Response): Promise<void> {
   const input = createLocationSchema.parse(req.body);
-  const location = await locationService.saveLocation(getAuth(req).userId, input);
-  res.status(201).json({ location });
+  const result = await locationService.saveLocation(getAuth(req).userId, input);
+  // A skipped duplicate is not an error: the place is already in the history, so the app can drop
+  // the point from its queue. 201 only when a row was created.
+  res.status(result.saved ? 201 : 200).json(result);
 }
 
 export async function listHistory(req: Request, res: Response): Promise<void> {
-  const options = historyQuerySchema.parse(req.query);
-  const locations = await locationService.listLocations(getAuth(req).userId, options);
-  res.status(200).json({ locations });
+  const { range, ...options } = resolveHistoryQuery(historyQuerySchema.parse(req.query));
+  // A date search reads like a diary (oldest first); recent history stays newest first.
+  const { locations, hasMore } = await locationService.searchLocations(getAuth(req).userId, {
+    ...options,
+    order: range ? "asc" : "desc",
+  });
+  res.status(200).json({ locations, hasMore, ...(range ? { range } : {}) });
 }
 
 export async function deleteHistory(req: Request, res: Response): Promise<void> {

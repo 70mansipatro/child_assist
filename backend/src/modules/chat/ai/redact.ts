@@ -16,9 +16,9 @@ const SECRET_PATTERNS: ReadonlyArray<[RegExp, string]> = [
   [/\b(?:sk|rk|pk)-[A-Za-z0-9_-]{20,}\b/g, REDACTED],
   [/\bgh[pousr]_[A-Za-z0-9]{30,}\b/g, REDACTED],
   [/\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g, REDACTED],
-  // "password is hunter2", "pin: 1234", "api key = abc".
+  // "password is hunter2", "pin: 1234", "my otp is 482913", "api key = abc".
   [
-    /\b(password|passwd|pwd|passcode|pin|api[ _-]?key|secret|access[ _-]?token|auth[ _-]?token)(\s*(?:is|=|:)\s*)("[^"]*"|'[^']*'|\S+)/gi,
+    /\b(password|passwd|pwd|passcode|pin|otp|one[ _-]?time (?:pass)?code|verification code|reset code|api[ _-]?key|secret|access[ _-]?token|auth[ _-]?token)(\s*(?:is|=|:)\s*)("[^"]*"|'[^']*'|\S+)/gi,
     `$1$2${REDACTED}`,
   ],
 ];

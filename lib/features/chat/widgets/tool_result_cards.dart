@@ -138,7 +138,12 @@ class LocationResultsCard extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(place.title, style: theme.textTheme.titleSmall),
-                        Text(_dateTimeLabel(context, place.capturedAt), style: theme.textTheme.bodySmall),
+                        Text(
+                          place.automatic
+                              ? '${_dateTimeLabel(context, place.capturedAt)} • Automatic'
+                              : _dateTimeLabel(context, place.capturedAt),
+                          style: theme.textTheme.bodySmall,
+                        ),
                         if (place.subtitle != null) Text(place.subtitle!, style: theme.textTheme.bodySmall),
                       ],
                     ),

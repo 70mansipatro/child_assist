@@ -1,4 +1,5 @@
 import type { PermissionType } from "../../../../generated/prisma/client";
+import type { UserZone } from "../../../lib/local-dates";
 
 // Results every tool returns to Gemini. Failures are structured so the model can explain them
 // in friendly words ("Please allow location access in Settings") instead of guessing.
@@ -49,6 +50,8 @@ export interface PendingActionView {
 export interface ToolContext {
   readonly userId: string;
   readonly conversationId: string;
+  /** The device's time zone, so "today" and "5 October" mean the user's local days. */
+  readonly zone: UserZone;
   /** Collects what happened during one chat turn, for the response and for rollback. */
   readonly run: {
     toolsUsed: string[];

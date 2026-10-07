@@ -1,5 +1,21 @@
 import 'device_location.dart' show joinParts;
 
+/// How a location was saved.
+enum LocationSource {
+  /// The user tapped "Get Current Location".
+  manual('MANUAL'),
+
+  /// Saved by Automatic Location History.
+  automatic('AUTOMATIC');
+
+  const LocationSource(this.apiValue);
+
+  final String apiValue;
+
+  /// Records from before automatic history existed have no source and were all manual.
+  static LocationSource fromApi(Object? value) => value == 'AUTOMATIC' ? automatic : manual;
+}
+
 /// A saved location from GET/POST /api/location.
 class LocationRecord {
   const LocationRecord({
@@ -16,6 +32,7 @@ class LocationRecord {
     this.postalCode,
     this.country,
     required this.capturedAt,
+    this.source = LocationSource.manual,
   });
 
   final String id;
@@ -37,6 +54,10 @@ class LocationRecord {
 
   /// When the device took the reading, in local time.
   final DateTime capturedAt;
+
+  final LocationSource source;
+
+  bool get isAutomatic => source == LocationSource.automatic;
 
   /// Area line under the place name, e.g. "Bhubaneswar, Odisha, India".
   String? get areaLine => joinParts([city, state, country], exclude: [placeName]);
@@ -64,6 +85,7 @@ class LocationRecord {
       postalCode: _text(json['postalCode']),
       country: _text(json['country']),
       capturedAt: capturedAt.toLocal(),
+      source: LocationSource.fromApi(json['source']),
     );
   }
 
