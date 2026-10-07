@@ -106,6 +106,11 @@ class LocationApi {
     return (json['deleted'] as num?)?.toInt() ?? 0;
   }
 
+  /// Tells the server what Automatic Location History is doing: STARTED, STOPPED or PAUSED. Only
+  /// the state, never a location; the server notifies the user only when it really changes.
+  Future<void> reportTrackingState(String token, String state) =>
+      _client.post('/api/location/tracking-status', token: token, body: {'state': state});
+
   // Geocoder text is device-provided; trim it to the server's limits rather than lose the
   // whole location to a validation error.
   static String? _limit(String? value, int max) =>

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'core/api/api_client.dart';
 import 'core/navigation/app_menu.dart';
+import 'core/notifications/notification_service.dart';
 import 'core/permissions/permission_service.dart';
 import 'features/auth/data/auth_api.dart';
 import 'features/auth/data/token_storage.dart';
@@ -21,6 +22,7 @@ import 'features/location/services/automatic_location_tracking_service.dart';
 import 'features/location/services/background_location_source.dart';
 import 'features/location/services/location_history_service.dart';
 import 'features/location/services/location_service.dart';
+import 'features/notifications/data/notifications_api.dart';
 import 'features/permissions/data/permissions_api.dart';
 import 'features/permissions/services/permission_onboarding_service.dart';
 import 'features/permissions/services/permission_sync_service.dart';
@@ -48,12 +50,13 @@ class AppServices {
     required this.messageHandoff,
     required this.voiceInput,
     required this.textToSpeech,
+    required this.notificationService,
   });
 
   /// Wires the real implementations. Tests can swap the HTTP client, storage, Google sign-in, the
   /// OS permission layer, the location hardware (foreground and background), the geocoder, the
   /// photo library, the device documents, the phone's contacts, WhatsApp/sharing, speech
-  /// recognition or text-to-speech.
+  /// recognition, text-to-speech or push delivery.
   factory AppServices.create({
     ApiClient? apiClient,
     TokenStorage? tokenStorage,
@@ -70,6 +73,7 @@ class AppServices {
     VoiceInput? voiceInput,
     TextToSpeechService? textToSpeech,
     ProfilePhotoPlatform? profilePhotoPlatform,
+    PushPlatform? pushPlatform,
   }) {
     final client = apiClient ?? ApiClient();
     final authService = AuthService(
@@ -122,6 +126,13 @@ class AppServices {
       messageHandoff: messageHandoff ?? const NativeMessageHandoff(),
       voiceInput: voiceInput ?? SpeechToTextVoiceInput(),
       textToSpeech: textToSpeech ?? FlutterTextToSpeechService(),
+      notificationService: NotificationService(
+        authService: authService,
+        api: NotificationsApi(client),
+        permissionService: permissions,
+        permissionSyncService: permissionSyncService,
+        platform: pushPlatform,
+      ),
     );
   }
 
@@ -153,6 +164,10 @@ class AppServices {
 
   /// Reads chat replies aloud when "Voice replies" is on.
   final TextToSpeechService textToSpeech;
+
+  /// Push notifications (FCM delivery only), the unread badge, history and preferences. Follows
+  /// the signed-in account: logout unregisters this phone.
+  final NotificationService notificationService;
 
   /// Light, dark or follow the device. Chosen in App Settings; kept for this app session only.
   final ValueNotifier<ThemeMode> themeMode = ValueNotifier(ThemeMode.system);

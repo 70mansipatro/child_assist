@@ -11,6 +11,8 @@ import { prisma } from "../../../lib/prisma";
 import { addMessage, recordToolCall, transitionToolCall, type ToolCallStatus } from "../chat.service";
 import type { PendingActionView, ToolContext } from "../tools/types";
 import { isValidEmail, sendUserEmail } from "./email.service";
+import { notifyInBackground } from "../../notifications/notification.service";
+import { templates } from "../../notifications/notification.types";
 import { buildContactPhoneShareMessage } from "./share-content";
 
 // Side-effect actions (an email, a WhatsApp message) never run inside a chat turn. The assistant
@@ -393,6 +395,8 @@ export async function executeEmailAction(userId: string, id: string): Promise<Ac
   });
   await audit(userId, id, "PENDING", delivered ? "SUCCEEDED" : "FAILED");
   await note(userId, action.conversationId, message);
+  // Only after the user confirmed and the send was attempted. No recipient or content in it.
+  notifyInBackground(userId, delivered ? templates.emailSent() : templates.emailFailed(), { dedupeKey: `email-action:${id}` });
   return outcome(final, message);
 }
 
@@ -424,6 +428,10 @@ export async function completeHandoff(
   });
   if (count === 0) throw await rejection(userId, id, scope, ChatActionStatus.CONFIRMED);
   await audit(userId, id, "PENDING", "SUCCEEDED");
+  if (result === "whatsapp_opened") {
+    // A reminder to finish in WhatsApp; never claims the message was sent.
+    notifyInBackground(userId, templates.whatsappOpened(), { dedupeKey: `whatsapp-action:${id}` });
+  }
 
   const message =
     result === "whatsapp_opened"

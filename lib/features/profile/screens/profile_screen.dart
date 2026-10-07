@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/api/api_client.dart';
 import '../../../core/navigation/app_menu.dart';
+import '../../../core/notifications/notification_service.dart';
 import '../../../core/widgets/widgets.dart';
 import '../models/profile.dart';
 import '../services/profile_photo_service.dart';
@@ -17,6 +18,7 @@ class ProfileScreen extends StatefulWidget {
     required this.photoService,
     required this.onOpenPermissions,
     required this.onOpenNotifications,
+    this.notificationService,
     required this.onOpenSettings,
     required this.onLogout,
   });
@@ -25,6 +27,9 @@ class ProfileScreen extends StatefulWidget {
   final ProfilePhotoService photoService;
   final VoidCallback onOpenPermissions;
   final VoidCallback onOpenNotifications;
+
+  /// Shows the unread count on the Notifications row when set.
+  final NotificationService? notificationService;
   final VoidCallback onOpenSettings;
   final Future<void> Function() onLogout;
 
@@ -270,12 +275,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               onTap: widget.onOpenPermissions,
                             ),
                             divider,
-                            MenuTile(
-                              icon: Icons.notifications_rounded,
-                              gradient: AppGradients.notifications,
-                              title: 'Notifications',
-                              subtitle: 'View your notifications',
-                              onTap: widget.onOpenNotifications,
+                            ListenableBuilder(
+                              listenable: widget.notificationService ?? const _NoUpdates(),
+                              builder: (context, _) {
+                                final unread = widget.notificationService?.unreadCount ?? 0;
+                                return MenuTile(
+                                  icon: Icons.notifications_rounded,
+                                  gradient: AppGradients.notifications,
+                                  title: 'Notifications',
+                                  subtitle: unread > 0 ? '$unread unread' : 'View your notifications',
+                                  onTap: widget.onOpenNotifications,
+                                  trailing: unread > 0 ? _UnreadBadge(count: unread) : null,
+                                );
+                              },
                             ),
                             divider,
                             MenuTile(
@@ -488,4 +500,37 @@ class _EditNameDialogState extends State<_EditNameDialog> {
       ],
     );
   }
+}
+
+/// The unread-notification count on the Notifications row.
+class _UnreadBadge extends StatelessWidget {
+  const _UnreadBadge({required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Badge(
+          label: Text(count > 99 ? '99+' : '$count'),
+          backgroundColor: AppColors.coral,
+          textColor: Colors.white,
+        ),
+        const SizedBox(width: 6),
+        Icon(Icons.chevron_right_rounded, color: Theme.of(context).colorScheme.onSurfaceVariant),
+      ],
+    );
+  }
+}
+
+class _NoUpdates implements Listenable {
+  const _NoUpdates();
+
+  @override
+  void addListener(VoidCallback listener) {}
+
+  @override
+  void removeListener(VoidCallback listener) {}
 }

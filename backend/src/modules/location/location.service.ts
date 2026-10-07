@@ -3,6 +3,8 @@ import { automaticLocationConfig } from "../../config/env";
 import { distanceMeters } from "../../lib/geo";
 import { prisma } from "../../lib/prisma";
 import { HttpError } from "../../lib/http-error";
+import { notifyInBackground } from "../notifications/notification.service";
+import { templates } from "../notifications/notification.types";
 import type { CreateLocationInput } from "./location.validation";
 
 export { LocationSource };
@@ -133,8 +135,9 @@ export async function saveLocation(userId: string, input: CreateLocationInput): 
 
   const { duplicateDistanceMeters, duplicateIntervalMs } = automaticLocationConfig();
   const at = input.capturedAt.getTime();
+  let result: SaveResult;
   try {
-    return await prisma.$transaction(async (tx) => {
+    result = await prisma.$transaction(async (tx) => {
       // Held until the transaction ends; keyed by the user so different users never wait on each other.
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`location:${userId}`}, 0))`;
       // Nearby in time on either side, so a point from an offline queue that arrives after newer
@@ -159,6 +162,17 @@ export async function saveLocation(userId: string, input: CreateLocationInput): 
   } catch (err) {
     rethrowMissingUser(err);
   }
+  if (result.saved) notifyTravelHistoryUpdated(userId);
+  return result;
+}
+
+/**
+ * Automatic places are saved silently; at most one "Your travel history has new activity" a day
+ * (server's UTC day) says so, never which place. Not one per reading.
+ */
+function notifyTravelHistoryUpdated(userId: string): void {
+  const day = new Date().toISOString().slice(0, 10);
+  notifyInBackground(userId, templates.travelHistoryUpdated(), { dedupeKey: `travel-history:${day}` });
 }
 
 /** The user's own locations, newest first unless asked otherwise. */

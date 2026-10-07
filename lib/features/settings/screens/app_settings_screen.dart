@@ -11,12 +11,16 @@ class AppSettingsScreen extends StatefulWidget {
     required this.textToSpeech,
     required this.themeMode,
     required this.onLogout,
+    this.onOpenNotificationSettings,
   });
 
   /// Holds the "Voice replies" choice shared with Chat.
   final TextToSpeechService textToSpeech;
   final ValueNotifier<ThemeMode> themeMode;
   final Future<void> Function() onLogout;
+
+  /// Opens Notification settings (which kinds of notifications the account receives).
+  final VoidCallback? onOpenNotificationSettings;
 
   @override
   State<AppSettingsScreen> createState() => _AppSettingsScreenState();
@@ -125,6 +129,16 @@ class _AppSettingsScreenState extends State<AppSettingsScreen> {
                             onTap: _chooseTheme,
                           ),
                         ),
+                        if (widget.onOpenNotificationSettings != null) ...[
+                          divider,
+                          MenuTile(
+                            icon: Icons.notifications_active_rounded,
+                            gradient: AppGradients.notifications,
+                            title: 'Notification settings',
+                            subtitle: 'Choose what Child Assist notifies you about',
+                            onTap: widget.onOpenNotificationSettings,
+                          ),
+                        ],
                         divider,
                         MenuTile(
                           icon: Icons.info_outline_rounded,

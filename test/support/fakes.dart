@@ -25,6 +25,11 @@ import 'package:child_assist/features/location/models/automatic_tracking.dart';
 import 'package:child_assist/features/location/services/background_location_source.dart';
 import 'package:child_assist/features/location/services/location_service.dart';
 import 'package:child_assist/features/photos/services/photo_gallery_service.dart';
+import 'package:child_assist/core/notifications/notification_service.dart';
+
+import 'fake_notifications.dart';
+
+export 'fake_notifications.dart';
 
 const testPassword = 'password123';
 
@@ -273,6 +278,9 @@ class FakeBackend {
 
   late final MockClient client = MockClient(_handle);
 
+  /// The notification endpoints: history, devices, preferences and tracking reports.
+  final notificationsBackend = FakeNotificationsBackend();
+
   AppServices services(
     PermissionService permissionService, {
     GoogleAuthService? googleAuthService,
@@ -286,6 +294,7 @@ class FakeBackend {
     VoiceInput? voiceInput,
     TextToSpeechService? textToSpeech,
     ProfilePhotoPlatform? profilePhotoPlatform,
+    PushPlatform? pushPlatform,
   }) =>
       AppServices.create(
         apiClient: ApiClient(baseUrl: 'http://test', httpClient: client),
@@ -302,6 +311,7 @@ class FakeBackend {
         voiceInput: voiceInput ?? FakeVoiceInput(),
         textToSpeech: textToSpeech ?? FakeTextToSpeech(),
         profilePhotoPlatform: profilePhotoPlatform ?? FakeProfilePhotoPlatform(),
+        pushPlatform: pushPlatform ?? FakePushPlatform(),
       );
 
   Future<http.Response> _handle(http.Request req) async {
@@ -528,6 +538,10 @@ class FakeBackend {
       return _json(200, {'permission': permission, 'status': status});
     }
 
+    if (path == '/api/location/tracking-status' && req.method == 'POST') {
+      return notificationsBackend.tracking(req, userId);
+    }
+    if (path.startsWith('/api/notifications')) return notificationsBackend.handle(req, userId);
     if (path.startsWith('/api/location')) {
       if (path == '/api/location/history' && req.method == 'GET') await historyGate?.future;
       return _handleLocation(req, userId);

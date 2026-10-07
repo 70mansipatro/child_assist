@@ -20,6 +20,9 @@ void main() {
   ));
   final services = AppServices.create();
   services.authService.restoreSession();
+  // Push notifications: Firebase Cloud Messaging delivery only. Picks up a notification tap that
+  // launched the app; it is opened once the session is restored and the app is ready.
+  services.notificationService.start();
   runApp(MyApp(services: services));
 }
 
@@ -43,7 +46,18 @@ class _MyAppState extends State<MyApp> {
     widget.services.authService.addListener(_onAuthChanged);
     // Back from Settings or the background: Automatic Location History checks the OS again
     // (stops if a permission was revoked, resumes if it was fixed) and retries unsent places.
-    _lifecycle = AppLifecycleListener(onResume: widget.services.automaticTrackingService.recheck);
+    _lifecycle = AppLifecycleListener(onResume: _onResume);
+  }
+
+  void _onResume() {
+    final services = widget.services;
+    services.automaticTrackingService.recheck();
+    // A permission changed in Settings is reported to the account (the server tells the user if
+    // one Child Assist relies on was turned off), and push registration follows the notification
+    // permission. Status checks only; no dialogs.
+    services.permissionSyncService.reportDeviceStatuses(services.permissionService);
+    services.notificationService.syncRegistration();
+    services.notificationService.refreshUnreadCount();
   }
 
   @override

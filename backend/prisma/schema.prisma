@@ -41,6 +41,10 @@ model User {
   emailVerificationCodes EmailVerificationCode[]
   passwordResetCodes     PasswordResetCode[]
 
+  notificationDevices     NotificationDevice[]
+  notifications           Notification[]
+  notificationPreference  NotificationPreference?
+
   @@map("users")
 }
 
@@ -298,4 +302,105 @@ model ChatAction {
   @@index([conversationId, createdAt])
   @@index([expiresAt])
   @@map("chat_actions")
+}
+
+// Phase 9: notifications. Firebase Cloud Messaging only delivers them; accounts, history and
+// preferences live here. Every row is owned by one user, taken from the verified JWT.
+
+// Every kind of notification Child Assist sends. Each maps to one preference category in
+// backend/src/modules/notifications/notification.types.ts.
+enum NotificationType {
+  ACCOUNT_LOGIN
+  ACCOUNT_SECURITY
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+  PASSWORD_CHANGED
+  PERMISSION_CHANGED
+  TRACKING_STARTED
+  TRACKING_STOPPED
+  TRACKING_PAUSED
+  LOCATION_UPDATED
+  TRAVEL_HISTORY_UPDATED
+  CHAT_REPLY_READY
+  EMAIL_ACTION
+  WHATSAPP_ACTION
+  DOCUMENT_UPDATED
+  PHOTO_UPDATED
+  SYSTEM
+  GENERAL
+}
+
+enum DevicePlatform {
+  ANDROID
+  IOS
+}
+
+// A phone that receives push notifications for the signed-in user. The FCM registration token
+// is unique: when another account signs in on the same phone the row moves to that account, so
+// one phone never receives two accounts' notifications. Deleted on logout and when FCM reports
+// the token as invalid. No hardware identifiers are stored.
+model NotificationDevice {
+  id         String         @id @default(uuid()) @db.Uuid
+  userId     String         @map("user_id") @db.Uuid
+  token      String         @unique @db.VarChar(4096)
+  platform   DevicePlatform
+  appVersion String?        @map("app_version") @db.VarChar(40)
+  enabled    Boolean        @default(true)
+  lastSeenAt DateTime       @default(now()) @map("last_seen_at")
+  createdAt  DateTime       @default(now()) @map("created_at")
+  updatedAt  DateTime       @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([enabled])
+  @@map("notification_devices")
+}
+
+// The user's notification history. Titles and bodies are fixed product copy: never coordinates,
+// addresses, contact details, chat content, codes or tokens. The app loads any details itself,
+// authenticated, after the user opens the notification.
+model Notification {
+  id        String           @id @default(uuid()) @db.Uuid
+  userId    String           @map("user_id") @db.Uuid
+  type      NotificationType
+  title     String           @db.VarChar(120)
+  body      String           @db.VarChar(300)
+  // An internal childassist:// route, e.g. childassist://location.
+  deepLink  String?          @map("deep_link") @db.VarChar(200)
+  // Non-sensitive extras only (e.g. which permission changed).
+  metadataJson Json?         @map("metadata_json")
+  // One business event creates at most one notification: e.g. "tracking started" is not
+  // repeated for every location callback. Unique per user.
+  dedupeKey String?          @map("dedupe_key") @db.VarChar(200)
+  readAt    DateTime?        @map("read_at")
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dedupeKey])
+  @@index([userId])
+  @@index([createdAt])
+  @@index([readAt])
+  @@map("notifications")
+}
+
+// Which categories the user wants. A missing row means all defaults (everything on). Security
+// alerts are always delivered: securityEnabled cannot be switched off.
+model NotificationPreference {
+  id                   String   @id @default(uuid()) @db.Uuid
+  userId               String   @unique @map("user_id") @db.Uuid
+  securityEnabled      Boolean  @default(true) @map("security_enabled")
+  accountEnabled       Boolean  @default(true) @map("account_enabled")
+  permissionEnabled    Boolean  @default(true) @map("permission_enabled")
+  locationEnabled      Boolean  @default(true) @map("location_enabled")
+  chatEnabled          Boolean  @default(true) @map("chat_enabled")
+  communicationEnabled Boolean  @default(true) @map("communication_enabled")
+  systemEnabled        Boolean  @default(true) @map("system_enabled")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notification_preferences")
 }

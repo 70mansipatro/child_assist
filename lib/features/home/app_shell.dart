@@ -1,11 +1,15 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../app_services.dart';
 import '../../core/navigation/app_menu.dart';
+import '../../core/notifications/notification_service.dart';
 import '../../core/widgets/widgets.dart';
 import '../chat/screens/chat_screen.dart';
 import '../documents/screens/documents_screen.dart';
 import '../location/screens/location_screen.dart';
+import '../notifications/screens/notification_settings_screen.dart';
 import '../notifications/screens/notifications_screen.dart';
 import '../permissions/screens/permissions_screen.dart';
 import '../photos/screens/photos_screen.dart';
@@ -37,16 +41,62 @@ class _AppShellState extends State<AppShell> {
   // fetched location survives switching tabs.
   final _visited = <int>{AppShell.dashboardTab};
 
+  /// Pages pushed on top of the tabs (Photos, Notifications...), for knowing what is on screen.
+  int _pushed = 0;
+
+  StreamSubscription<PushMessage>? _alerts;
+
+  NotificationService get _notifications => widget.services.notificationService;
+
   @override
   void initState() {
     super.initState();
     widget.services.appMenu.attach(_go);
+    _notifications.addListener(_openPendingNotification);
+    _alerts = _notifications.inAppAlerts.listen(_showAlert);
+    _reportVisible();
+    // A notification tapped before the app was ready (e.g. it launched the app) opens now.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _openPendingNotification());
+    unawaited(_notifications.syncRegistration());
+    unawaited(_notifications.refreshUnreadCount());
   }
 
   @override
   void dispose() {
     widget.services.appMenu.detach(_go);
+    _notifications.removeListener(_openPendingNotification);
+    _notifications.setVisibleDestination(null);
+    _alerts?.cancel();
     super.dispose();
+  }
+
+  void _openPendingNotification() {
+    if (!mounted || _notifications.pendingRoute == null) return;
+    final route = _notifications.takePendingRoute();
+    if (route != null) _go(route.destination);
+  }
+
+  /// Security alerts that arrive while the app is open also show inside it.
+  void _showAlert(PushMessage message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message.title ?? 'Child Assist security alert'),
+        action: SnackBarAction(label: 'View', onPressed: _openNotifications),
+      ),
+    );
+  }
+
+  void _reportVisible() {
+    final destination = _pushed > 0
+        ? null
+        : switch (_index) {
+            AppShell.chatTab => AppDestination.chat,
+            AppShell.locationTab => AppDestination.location,
+            AppShell.profileTab => AppDestination.profile,
+            _ => AppDestination.dashboard,
+          };
+    _notifications.setVisibleDestination(destination);
   }
 
   /// Opens a page chosen from the ☰ menu: closes whatever is on top, then shows a tab or
@@ -82,9 +132,16 @@ class _AppShellState extends State<AppShell> {
       _index = index;
       _visited.add(index);
     });
+    _reportVisible();
   }
 
-  void _push(Widget screen) => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => screen));
+  Future<void> _push(Widget screen) async {
+    _pushed++;
+    _reportVisible();
+    await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => screen));
+    _pushed--;
+    if (mounted) _reportVisible();
+  }
 
   void _openPhotos() => _push(
     PhotosScreen(
@@ -102,13 +159,29 @@ class _AppShellState extends State<AppShell> {
     ),
   );
 
-  void _openNotifications() => _push(NotificationsScreen(onOpenPermissions: _openPermissions));
+  void _openNotifications() => _push(
+    NotificationsScreen(
+      notificationService: _notifications,
+      permissionService: widget.services.permissionService,
+      onOpenRoute: (route) => _go(route.destination),
+      onOpenPermissions: _openPermissions,
+    ),
+  );
+
+  void _openNotificationSettings() => _push(
+    NotificationSettingsScreen(
+      notificationService: _notifications,
+      permissionService: widget.services.permissionService,
+      onOpenPermissions: _openPermissions,
+    ),
+  );
 
   void _openSettings() => _push(
     AppSettingsScreen(
       textToSpeech: widget.services.textToSpeech,
       themeMode: widget.services.themeMode,
       onLogout: widget.services.authService.logout,
+      onOpenNotificationSettings: _openNotificationSettings,
     ),
   );
 
@@ -124,6 +197,7 @@ class _AppShellState extends State<AppShell> {
         onOpenDocuments: _openDocuments,
         onOpenPermissions: _openPermissions,
         onOpenNotifications: _openNotifications,
+        notificationService: services.notificationService,
         trackingService: services.automaticTrackingService,
         onOpenLocation: () => _select(AppShell.locationTab),
       ),
@@ -150,6 +224,7 @@ class _AppShellState extends State<AppShell> {
         photoService: services.profilePhotoService,
         onOpenPermissions: _openPermissions,
         onOpenNotifications: _openNotifications,
+        notificationService: services.notificationService,
         onOpenSettings: _openSettings,
         onLogout: services.authService.logout,
       ),
@@ -175,7 +250,14 @@ class _AppShellState extends State<AppShell> {
               ),
           ],
         ),
-        bottomNavigationBar: _GradientNavigationBar(selectedIndex: _index, onSelected: _select),
+        bottomNavigationBar: ListenableBuilder(
+          listenable: _notifications,
+          builder: (context, _) => _GradientNavigationBar(
+            selectedIndex: _index,
+            onSelected: _select,
+            unreadNotifications: _notifications.unreadCount,
+          ),
+        ),
       ),
     );
   }
@@ -185,10 +267,13 @@ class _AppShellState extends State<AppShell> {
 /// It is a standard [NavigationBar] on a transparent background, so labels, semantics,
 /// keyboard focus and the system-gesture inset all behave natively.
 class _GradientNavigationBar extends StatelessWidget {
-  const _GradientNavigationBar({required this.selectedIndex, required this.onSelected});
+  const _GradientNavigationBar({required this.selectedIndex, required this.onSelected, this.unreadNotifications = 0});
 
   final int selectedIndex;
   final ValueChanged<int> onSelected;
+
+  /// Shown as a badge on Profile, where Notifications lives.
+  final int unreadNotifications;
 
   static final _unselected = Colors.white.withValues(alpha: 0.68);
 
@@ -234,30 +319,39 @@ class _GradientNavigationBar extends StatelessWidget {
         child: NavigationBar(
           selectedIndex: selectedIndex,
           onDestinationSelected: onSelected,
-          destinations: const [
-            NavigationDestination(
+          destinations: [
+            const NavigationDestination(
               icon: Icon(Icons.home_outlined),
               selectedIcon: Icon(Icons.home_rounded),
               label: 'Dashboard',
             ),
-            NavigationDestination(
+            const NavigationDestination(
               icon: Icon(Icons.chat_bubble_outline_rounded),
               selectedIcon: Icon(Icons.chat_bubble_rounded),
               label: 'Chat',
             ),
-            NavigationDestination(
+            const NavigationDestination(
               icon: Icon(Icons.location_on_outlined),
               selectedIcon: Icon(Icons.location_on_rounded),
               label: 'Location',
             ),
             NavigationDestination(
-              icon: Icon(Icons.person_outline_rounded),
-              selectedIcon: Icon(Icons.person_rounded),
+              icon: _badged(const Icon(Icons.person_outline_rounded)),
+              selectedIcon: _badged(const Icon(Icons.person_rounded)),
               label: 'Profile',
+              tooltip: unreadNotifications > 0 ? 'Profile, $unreadNotifications unread notifications' : null,
             ),
           ],
         ),
       ),
     );
   }
+
+  Widget _badged(Widget icon) => Badge(
+    isLabelVisible: unreadNotifications > 0,
+    label: Text(unreadNotifications > 99 ? '99+' : '$unreadNotifications'),
+    backgroundColor: AppColors.coral,
+    textColor: Colors.white,
+    child: icon,
+  );
 }

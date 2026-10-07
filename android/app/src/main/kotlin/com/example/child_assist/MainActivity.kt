@@ -26,6 +26,22 @@ class MainActivity : FlutterActivity() {
     private val io = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
 
+    private fun appVersion(): String? = try {
+        val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0))
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.getPackageInfo(packageName, 0)
+        }
+        val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode else {
+            @Suppress("DEPRECATION")
+            info.versionCode.toLong()
+        }
+        "${info.versionName}+$code"
+    } catch (e: PackageManager.NameNotFoundException) {
+        null
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         // Lets Dart pick the right photo permission (READ_MEDIA_IMAGES vs. storage) per Android version.
@@ -33,6 +49,8 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "getSdkInt" -> result.success(Build.VERSION.SDK_INT)
+                    // Sent with the push-notification registration, e.g. "1.0.0+1".
+                    "getAppVersion" -> result.success(appVersion())
                     else -> result.notImplemented()
                 }
             }

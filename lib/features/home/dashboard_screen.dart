@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/widgets/widgets.dart';
 import '../auth/models/user.dart';
+import '../../core/notifications/notification_service.dart';
 import '../auth/services/auth_service.dart';
 import '../location/services/automatic_location_tracking_service.dart';
 import '../location/widgets/tracking_status.dart';
@@ -22,6 +23,7 @@ class DashboardScreen extends StatelessWidget {
     required this.onOpenDocuments,
     required this.onOpenPermissions,
     required this.onOpenNotifications,
+    this.notificationService,
     this.trackingService,
     this.onOpenLocation,
   });
@@ -41,6 +43,9 @@ class DashboardScreen extends StatelessWidget {
   final VoidCallback onOpenDocuments;
   final VoidCallback onOpenPermissions;
   final VoidCallback onOpenNotifications;
+
+  /// Shows the unread count on the Notifications card when set.
+  final NotificationService? notificationService;
 
   /// Shows the Automatic Location History status card when set; tapping it calls [onOpenLocation].
   final AutomaticLocationTrackingService? trackingService;
@@ -84,6 +89,7 @@ class DashboardScreen extends StatelessWidget {
         subtitle: 'View your notifications',
         gradient: AppGradients.notifications,
         onTap: onOpenNotifications,
+        badge: notificationService,
       ),
     ];
 
@@ -399,6 +405,7 @@ class _FeatureData {
     required this.subtitle,
     required this.gradient,
     required this.onTap,
+    this.badge,
   });
 
   final IconData icon;
@@ -406,6 +413,9 @@ class _FeatureData {
   final String subtitle;
   final LinearGradient gradient;
   final VoidCallback onTap;
+
+  /// Unread notifications, shown on the card's icon.
+  final NotificationService? badge;
 }
 
 class _FeatureCard extends StatelessWidget {
@@ -437,7 +447,21 @@ class _FeatureCard extends StatelessWidget {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    IconBadge(icon: data.icon, gradient: data.gradient, size: 46),
+                    data.badge == null
+                        ? IconBadge(icon: data.icon, gradient: data.gradient, size: 46)
+                        : ListenableBuilder(
+                            listenable: data.badge!,
+                            builder: (context, _) {
+                              final unread = data.badge!.unreadCount;
+                              return Badge(
+                                isLabelVisible: unread > 0,
+                                label: Text(unread > 99 ? '99+' : '$unread', key: const ValueKey('dashboard-unread')),
+                                backgroundColor: AppColors.coral,
+                                textColor: Colors.white,
+                                child: IconBadge(icon: data.icon, gradient: data.gradient, size: 46),
+                              );
+                            },
+                          ),
                     const Spacer(),
                     Container(
                       width: 30,

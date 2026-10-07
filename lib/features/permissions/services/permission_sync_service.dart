@@ -59,6 +59,21 @@ class PermissionSyncService extends ChangeNotifier {
     return true;
   }
 
+  /// Reports what the OS currently says for every permission (e.g. after returning from the
+  /// system Settings). Status checks only, never a dialog; only changes are sent, and a plain
+  /// "denied" never overwrites UNKNOWN. Never throws.
+  Future<void> reportDeviceStatuses(PermissionService permissions) async {
+    if (_auth.currentUser == null) return;
+    for (final permission in AppPermission.values) {
+      try {
+        await report(permission, await permissions.status(permission), fromRequest: false);
+      } catch (_) {
+        // Offline or signed out meanwhile: the next resume tries again.
+        return;
+      }
+    }
+  }
+
   // Never carry one user's statuses over to the next account on this device.
   void _onAuthChanged() {
     if (_auth.currentUser?.id != _loadedForUserId) {

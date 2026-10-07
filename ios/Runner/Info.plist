@@ -33,6 +33,7 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>
+		<string>remote-notification</string>
 	</array>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Child Assist uses your microphone only when you tap the voice button, so it can understand what you say.</string>

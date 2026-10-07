@@ -6,6 +6,8 @@ import { HttpError } from "../../lib/http-error";
 import { assertEmailConfigured, googleAccountResetEmail, passwordResetEmail, sendEmail } from "../../lib/email";
 import { generateCode } from "./email-verification.service";
 import { BCRYPT_ROUNDS } from "./auth.service";
+import { notifyInBackground } from "../notifications/notification.service";
+import { templates } from "../notifications/notification.types";
 
 // "Forgot password". Separate from email verification throughout: its own table, its own HMAC key
 // (so a code issued for one purpose can never match the other) and its own errors.
@@ -221,7 +223,7 @@ export async function resetPassword(resetToken: string, newPassword: string): Pr
   const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
   const now = new Date();
 
-  await prisma.$transaction(async (tx) => {
+  const userId = await prisma.$transaction(async (tx) => {
     const reset = await tx.passwordResetCode.findUnique({
       where: { resetTokenHash: hashResetToken(resetToken) },
       select: { id: true, userId: true, consumedAt: true, resetTokenExpiresAt: true },
@@ -245,5 +247,8 @@ export async function resetPassword(resetToken: string, newPassword: string): Pr
       data: { consumedAt: now },
     });
     await tx.user.update({ where: { id: reset.userId }, data: { passwordHash } });
+    return reset.userId;
   });
+  // Security alert to the account's signed-in phones; never contains the code or the token.
+  notifyInBackground(userId, templates.passwordReset());
 }

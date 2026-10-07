@@ -1,7 +1,8 @@
 import "dotenv/config";
 import { createApp } from "./app";
 import { prisma } from "./lib/prisma";
-import { smtpConfig } from "./config/env";
+import { pushConfig, smtpConfig } from "./config/env";
+import { settleNotifications } from "./modules/notifications/notification.service";
 
 const app = createApp();
 const PORT = Number(process.env.PORT) || 3000;
@@ -19,6 +20,10 @@ async function start(): Promise<void> {
   if (smtp.error) {
     console.warn(`Email is not configured (${smtp.error}): registration cannot send verification codes.`);
   }
+  const push = pushConfig();
+  if (push.error) {
+    console.warn(`Push notifications are not configured (${push.error}): notifications are saved to history only.`);
+  }
 
   const server = app.listen(PORT, () => {
     console.log(`Child Assist backend listening on http://localhost:${PORT}`);
@@ -27,6 +32,7 @@ async function start(): Promise<void> {
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`${signal} received, shutting down`);
     server.close();
+    await settleNotifications();
     await prisma.$disconnect();
     process.exit(0);
   };

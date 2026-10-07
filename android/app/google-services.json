@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "625411399948",
+    "project_id": "stock-analyzer-509917",
+    "storage_bucket": "stock-analyzer-509917.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:625411399948:android:815a1717e88652b8772929",
+        "android_client_info": {
+          "package_name": "com.example.child_assist"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "625411399948-a72mdnfnpsshk6qet4mkaa24b5f20mjr.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBRnQU4pg8XbZfybSWk40yXKLODeEQckOw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "625411399948-a72mdnfnpsshk6qet4mkaa24b5f20mjr.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

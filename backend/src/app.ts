@@ -5,6 +5,7 @@ import { profileRouter } from "./modules/profile/profile.routes";
 import { permissionsRouter } from "./modules/permissions/permissions.routes";
 import { locationRouter } from "./modules/location/location.routes";
 import { chatRouter } from "./modules/chat/chat.routes";
+import { notificationsRouter } from "./modules/notifications/notification.routes";
 import { errorHandler, notFoundHandler } from "./middleware/error.middleware";
 import { corsMiddleware } from "./middleware/cors.middleware";
 
@@ -28,6 +29,7 @@ export function createApp(): Express {
   app.use("/api/permissions", permissionsRouter);
   app.use("/api/location", locationRouter);
   app.use("/api/chat", chatRouter);
+  app.use("/api/notifications", notificationsRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

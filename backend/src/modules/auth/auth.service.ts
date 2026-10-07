@@ -5,6 +5,8 @@ import { HttpError } from "../../lib/http-error";
 import { signAccessToken } from "../../lib/jwt";
 import { verifyGoogleIdToken } from "../../lib/google-token";
 import { assertEmailConfigured } from "../../lib/email";
+import { notifyInBackground } from "../notifications/notification.service";
+import { templates } from "../notifications/notification.types";
 import { issueVerificationCode, issueVerificationCodeQuietly, verifyEmailCode } from "./email-verification.service";
 import type {
   GoogleLoginInput,
@@ -122,10 +124,17 @@ export async function login(input: LoginInput): Promise<AuthResult | Verificatio
     return { requiresEmailVerification: true };
   }
 
-  return {
-    user: { id: user.id, name: user.name, email: user.email },
-    token: signAccessToken(user.id),
-  };
+  return signedIn({ id: user.id, name: user.name, email: user.email });
+}
+
+/**
+ * Starts a session and tells the account's devices about it ("A new device signed in"). The alert
+ * reaches phones that are already signed in; the phone signing in registers for pushes only
+ * afterwards. It names no device, place or address, and never delays or fails the login.
+ */
+function signedIn(user: SafeUser): AuthResult {
+  notifyInBackground(user.id, templates.newLogin());
+  return { user, token: signAccessToken(user.id) };
 }
 
 const ACCOUNT_EXISTS = new HttpError(
@@ -146,7 +155,7 @@ export async function googleLogin(input: GoogleLoginInput): Promise<AuthResult> 
   const identity = await verifyGoogleIdToken(input.idToken);
 
   const linked = await prisma.user.findUnique({ where: { googleSubject: identity.subject }, select: safeUserSelect });
-  if (linked) return { user: linked, token: signAccessToken(linked.id) };
+  if (linked) return signedIn(linked);
 
   const sameEmail = await prisma.user.findUnique({ where: { email: identity.email }, select: { id: true } });
   if (sameEmail) throw ACCOUNT_EXISTS;
@@ -163,13 +172,13 @@ export async function googleLogin(input: GoogleLoginInput): Promise<AuthResult> 
       },
       select: safeUserSelect,
     });
-    return { user, token: signAccessToken(user.id) };
+    return signedIn(user);
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
       // A concurrent request created the account first: sign in to it if it is this Google
       // account, otherwise the email was taken in the meantime.
       const created = await prisma.user.findUnique({ where: { googleSubject: identity.subject }, select: safeUserSelect });
-      if (created) return { user: created, token: signAccessToken(created.id) };
+      if (created) return signedIn(created);
       throw ACCOUNT_EXISTS;
     }
     throw err;

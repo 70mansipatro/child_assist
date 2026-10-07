@@ -140,3 +140,33 @@ export function chatAiConfig(): ChatAiConfig {
     guardrailModel: optional("GUARDRAIL_MODEL"),
   };
 }
+
+export interface PushConfig {
+  /** The Firebase project that owns the app's FCM registration tokens. */
+  projectId: string;
+  /** A Firebase Admin service-account key file kept outside the repo. */
+  serviceAccountPath: string | undefined;
+  /**
+   * A service account to impersonate with Application Default Credentials (short-lived tokens, no
+   * key file). The ADC identity needs roles/iam.serviceAccountTokenCreator on it.
+   */
+  impersonateServiceAccount: string | undefined;
+}
+
+/**
+ * Firebase Cloud Messaging settings. FCM only delivers notifications; nothing else in the backend
+ * uses Firebase. Read on demand: without FCM_PROJECT_ID, notifications are still saved to the
+ * user's history and only the push is skipped. Credentials stay on the server, never in the app.
+ */
+export function pushConfig(): { config?: PushConfig; error?: string } {
+  const optional = (name: string) => process.env[name]?.trim() || undefined;
+  const projectId = optional("FCM_PROJECT_ID");
+  if (!projectId) return { error: "FCM_PROJECT_ID is not set" };
+  return {
+    config: {
+      projectId,
+      serviceAccountPath: optional("FIREBASE_SERVICE_ACCOUNT_PATH"),
+      impersonateServiceAccount: optional("FCM_IMPERSONATE_SERVICE_ACCOUNT"),
+    },
+  };
+}

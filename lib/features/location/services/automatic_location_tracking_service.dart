@@ -289,6 +289,34 @@ class AutomaticLocationTrackingService extends ChangeNotifier {
     _status = status;
     _issue = issue;
     notifyListeners();
+    _reportState(status);
+  }
+
+  /// The last state told to the server for this account, so repeated callbacks send nothing.
+  String? _reportedState;
+
+  /// Lets the server notify "tracking started / stopped / paused" (only the state; never where).
+  /// Account changes never report: logging out is not the user stopping tracking.
+  void _reportState(AutomaticTrackingStatus status) {
+    final state = switch (status) {
+      AutomaticTrackingStatus.active => 'STARTED',
+      AutomaticTrackingStatus.off => 'STOPPED',
+      AutomaticTrackingStatus.paused || AutomaticTrackingStatus.permissionRequired => 'PAUSED',
+      AutomaticTrackingStatus.starting || AutomaticTrackingStatus.error => null,
+    };
+    final owner = _owner;
+    if (state == null || owner == null || state == _reportedState) return;
+    // "Stopped" only after it was running or paused in this session.
+    if (state == 'STOPPED' && _reportedState == null) return;
+    _reportedState = state;
+    unawaited(() async {
+      try {
+        if (_auth.currentUser?.id != owner) return;
+        await _auth.authorized((token) => _api.reportTrackingState(token, state));
+      } catch (_) {
+        // A notification is secondary: tracking never depends on it.
+      }
+    }());
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -442,6 +470,7 @@ class AutomaticLocationTrackingService extends ChangeNotifier {
     _retryTimer?.cancel();
     _retryTimer = null;
     _owner = userId;
+    _reportedState = null;
     _enabled = false;
     _restoring = false;
     _status = AutomaticTrackingStatus.off;

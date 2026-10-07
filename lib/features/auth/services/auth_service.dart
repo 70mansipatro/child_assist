@@ -37,6 +37,13 @@ class AuthService extends ChangeNotifier {
   AuthStatus _status = AuthStatus.unknown;
   User? _user;
 
+  final List<Future<void> Function(String token)> _logoutHooks = [];
+
+  /// Runs [hook] on logout, before the token is deleted, so account-specific server state tied
+  /// to this phone (e.g. its push registration) can be removed. A failing or slow hook never
+  /// prevents signing out.
+  void addLogoutHook(Future<void> Function(String token) hook) => _logoutHooks.add(hook);
+
   AuthStatus get status => _status;
   User? get currentUser => _user;
 
@@ -164,6 +171,15 @@ class AuthService extends ChangeNotifier {
   /// deleting the locally stored token. The token is removed even if the call fails.
   Future<void> logout() async {
     final token = await _storage.read();
+    if (token != null) {
+      for (final hook in _logoutHooks) {
+        try {
+          await hook(token).timeout(const Duration(seconds: 5));
+        } catch (_) {
+          // Ignore: signing out locally must always work.
+        }
+      }
+    }
     try {
       if (token != null) await _api.logout(token);
     } on ApiException {
