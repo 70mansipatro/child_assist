@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { createApp } from "./app";
 import { prisma } from "./lib/prisma";
+import { smtpConfig } from "./config/env";
 
 const app = createApp();
 const PORT = Number(process.env.PORT) || 3000;
@@ -12,6 +13,11 @@ async function start(): Promise<void> {
   } catch (err) {
     console.error("Failed to connect to PostgreSQL", err);
     process.exit(1);
+  }
+
+  const smtp = smtpConfig();
+  if (smtp.error) {
+    console.warn(`Email is not configured (${smtp.error}): registration cannot send verification codes.`);
   }
 
   const server = app.listen(PORT, () => {

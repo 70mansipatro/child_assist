@@ -8,6 +8,18 @@ import 'google_auth_service.dart';
 
 enum AuthStatus { unknown, authenticated, unauthenticated }
 
+/// The password was right, but the account's email address is not verified yet, so no session
+/// was started. The server has emailed a code (unless it sent one moments ago).
+class EmailNotVerifiedException implements Exception {
+  const EmailNotVerifiedException(this.email, this.message);
+
+  final String email;
+  final String message;
+
+  @override
+  String toString() => 'EmailNotVerifiedException: $message';
+}
+
 /// Owns the signed-in state. Widgets listen to it to switch between login and home.
 class AuthService extends ChangeNotifier {
   AuthService({required AuthApi api, required TokenStorage storage, GoogleAuthService? google})
@@ -44,18 +56,36 @@ class AuthService extends ChangeNotifier {
     }
   }
 
-  Future<void> register({
+  /// Creates an account and has a verification code emailed to it. Does not sign in: the user
+  /// must verify the email and then log in. Returns the server's message.
+  Future<String> register({
     required String name,
     required String email,
     required String password,
-  }) async {
-    final result = await _api.register(name: name, email: email, password: password);
-    await _storage.write(result.token);
-    _setSignedIn(result.user);
+  }) {
+    return _api.register(name: name, email: email, password: password);
   }
 
+  /// Verifies the account's email with the 6-digit code. Does not sign in.
+  Future<void> verifyEmail({required String email, required String code}) {
+    return _api.verifyEmail(email: email, code: code);
+  }
+
+  /// Asks the server to email a new verification code. Returns its (deliberately generic) message.
+  Future<String> resendVerification({required String email}) {
+    return _api.resendVerification(email: email);
+  }
+
+  /// Throws [EmailNotVerifiedException] if the password is right but the email is not verified
+  /// yet, or [ApiException] for any other failure.
   Future<void> login({required String email, required String password}) async {
-    final result = await _api.login(email: email, password: password);
+    final AuthResponse result;
+    try {
+      result = await _api.login(email: email, password: password);
+    } on ApiException catch (e) {
+      if (e.code == 'EMAIL_NOT_VERIFIED') throw EmailNotVerifiedException(email, e.message);
+      rethrow;
+    }
     await _storage.write(result.token);
     _setSignedIn(result.user);
   }

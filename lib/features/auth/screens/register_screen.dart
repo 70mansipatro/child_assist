@@ -4,6 +4,7 @@ import '../../../core/api/api_client.dart';
 import '../../../core/widgets/widgets.dart';
 import '../services/auth_service.dart';
 import '../widgets/auth_widgets.dart';
+import 'verify_email_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key, required this.authService});
@@ -45,13 +46,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
       _error = null;
     });
     try {
+      final email = _emailController.text.trim().toLowerCase();
       await widget.authService.register(
         name: _nameController.text.trim(),
-        email: _emailController.text.trim(),
+        email: email,
         password: _passwordController.text,
       );
-      // Signed in: the root now shows Home, so drop this pushed route.
-      if (mounted) Navigator.of(context).popUntil((route) => route.isFirst);
+      if (!mounted) return;
+      // No session yet: the emailed code must be verified first. "Change email" comes back here
+      // with the form as it was; a verified email goes on to Login.
+      final verified = await Navigator.of(context).push<String>(MaterialPageRoute(
+        builder: (_) => VerifyEmailScreen(authService: widget.authService, email: email),
+      ));
+      if (verified != null && mounted) Navigator.of(context).pop(verified);
     } on ApiException catch (e) {
       if (mounted) {
         setState(() {

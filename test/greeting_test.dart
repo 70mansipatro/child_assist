@@ -51,13 +51,7 @@ void main() {
 
   testWidgets('a new registration is greeted by the name it registered with', (tester) async {
     await startApp(tester);
-    await tester.tap(find.text("Don't have an account? Register"));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextFormField).at(0), 'Rahul');
-    await tester.enterText(find.byType(TextFormField).at(1), 'rahul@example.com');
-    await tester.enterText(find.byType(TextFormField).at(2), testPassword);
-    await tester.tap(find.widgetWithText(FilledButton, 'Register'));
-    await tester.pumpAndSettle();
+    await registerVerifyAndLogIn(tester, backend, 'Rahul', 'rahul@example.com');
 
     // New accounts go through the permission walkthrough first; mark it done on the server.
     final id = backend.users.values.firstWhere((u) => u['email'] == 'rahul@example.com')['id'] as String;

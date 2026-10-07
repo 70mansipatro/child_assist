@@ -28,6 +28,42 @@ export function googleWebClientId(): string | undefined {
   return process.env.GOOGLE_WEB_CLIENT_ID?.trim() || undefined;
 }
 
+export interface SmtpConfig {
+  host: string;
+  port: number;
+  /** true: TLS from the start (usually port 465). false: STARTTLS upgrade (usually port 587). */
+  secure: boolean;
+  user: string | undefined;
+  password: string | undefined;
+  /** The From header, e.g. `Child Assist <no-reply@example.com>`. */
+  from: string;
+}
+
+/**
+ * SMTP settings for sending verification codes. Read on demand: without them the rest of the API
+ * keeps working, and the endpoints that must send email answer 503. Returns undefined when SMTP is
+ * not configured or a value is invalid; the error names the setting but never echoes its value.
+ */
+export function smtpConfig(): { config?: SmtpConfig; error?: string } {
+  const optional = (name: string) => process.env[name]?.trim() || undefined;
+  const host = optional("SMTP_HOST");
+  const from = optional("SMTP_FROM");
+  if (!host || !from) return { error: "SMTP_HOST and SMTP_FROM must be set" };
+
+  const port = Number(optional("SMTP_PORT") ?? "587");
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return { error: "SMTP_PORT must be a port number" };
+
+  const secureRaw = (optional("SMTP_SECURE") ?? "false").toLowerCase();
+  if (secureRaw !== "true" && secureRaw !== "false") return { error: "SMTP_SECURE must be true or false" };
+
+  const user = optional("SMTP_USER");
+  // Not trimmed: a password may legitimately start or end with a space.
+  const password = process.env.SMTP_PASSWORD || undefined;
+  if (Boolean(user) !== Boolean(password)) return { error: "SMTP_USER and SMTP_PASSWORD must be set together" };
+
+  return { config: { host, port, secure: secureRaw === "true", user, password, from } };
+}
+
 export interface ChatAiConfig {
   vertexProject: string | undefined;
   vertexLocation: string;

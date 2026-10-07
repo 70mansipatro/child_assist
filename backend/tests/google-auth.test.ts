@@ -13,6 +13,7 @@ import { createApp } from "../src/app";
 import { verifyAccessToken } from "../src/lib/jwt";
 import { setGoogleSigningKeysSource } from "../src/lib/google-token";
 import { prisma } from "../src/lib/prisma";
+import { emailsTo, registerVerifiedUser } from "./support/auth";
 
 const AUDIENCE = "child-assist-test-web-client.apps.googleusercontent.com";
 const KID = "test-key";
@@ -119,6 +120,9 @@ describe("POST /api/auth/google", () => {
     assert.equal(rows.length, 1);
     assert.equal(rows[0].googleSubject, sub);
     assert.equal(rows[0].passwordHash, null);
+    // Google verified the address: no verification code is needed or sent.
+    assert.equal(rows[0].emailVerified, true);
+    assert.equal(emailsTo(email).length, 0);
   });
 
   test("5. the same Google account signs in to the same user, with no duplicate", async () => {
@@ -193,8 +197,7 @@ describe("POST /api/auth/google", () => {
 
   test("7. an existing password account with the same email is not merged or taken over", async () => {
     const email = uniqueEmail();
-    const reg = await call("POST", "/api/auth/register", { body: { name: "Password User", email, password: "password123" } });
-    assert.equal(reg.status, 201, reg.raw);
+    await registerVerifiedUser(call, "Password User", email);
     const before = await prisma.user.findUniqueOrThrow({ where: { email } });
 
     const res = await googleLogin(idToken({ sub: `sub-${randomUUID()}`, email, name: "Attacker" }));
@@ -225,9 +228,15 @@ describe("POST /api/auth/google", () => {
     assert.equal(res.json.message, "This account uses Google Sign-In. Please continue with Google.");
     assert.ok(!("token" in res.json));
 
-    // Registering a password account over it is refused too.
+    // Registering a password account over it changes nothing, sends nothing, and gets the same
+    // answer as any registration (so it does not reveal that the account exists).
     const reg = await call("POST", "/api/auth/register", { body: { name: "X", email, password: "password123" } });
-    assert.equal(reg.status, 409, reg.raw);
+    assert.equal(reg.status, 201, reg.raw);
+    assert.ok(!("token" in reg.json));
+    assert.equal(emailsTo(email).length, 0);
+    const row = await prisma.user.findUniqueOrThrow({ where: { email } });
+    assert.equal(row.passwordHash, null);
+    assert.notEqual(row.name, "X");
   });
 
   test("10. a Google-created user can use their profile like any other user", async () => {

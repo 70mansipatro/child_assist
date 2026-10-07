@@ -5,6 +5,7 @@ import '../../../core/widgets/widgets.dart';
 import '../services/auth_service.dart';
 import '../widgets/auth_widgets.dart';
 import 'register_screen.dart';
+import 'verify_email_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key, required this.authService});
@@ -23,6 +24,7 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _googleBusy = false;
   bool _obscure = true;
   String? _error;
+  String? _notice;
 
   bool get _busy => _submitting || _googleBusy;
 
@@ -38,6 +40,7 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() {
       _submitting = true;
       _error = null;
+      _notice = null;
     });
     try {
       // On success AuthService notifies listeners and the app switches to Home.
@@ -45,11 +48,32 @@ class _LoginScreenState extends State<LoginScreen> {
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
+    } on EmailNotVerifiedException catch (e) {
+      if (mounted) setState(() => _submitting = false);
+      await _openVerification(
+        VerifyEmailScreen(
+          authService: widget.authService,
+          email: e.email.toLowerCase(),
+          notice: '${e.message} Enter the latest code we emailed you.',
+        ),
+      );
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.message);
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
+  }
+
+  /// Opens Register or Verify Email. Both end with the verified email when verification succeeds;
+  /// the user then logs in here with it filled in.
+  Future<void> _openVerification(Widget screen) async {
+    final verified = await Navigator.of(context).push<String>(MaterialPageRoute(builder: (_) => screen));
+    if (verified == null || !mounted) return;
+    setState(() {
+      _emailController.text = verified;
+      _error = null;
+      _notice = 'Email verified successfully. Log in to continue.';
+    });
   }
 
   @override
@@ -104,6 +128,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             (v == null || v.isEmpty) ? 'Please enter your password' : null,
                       ),
                       AuthError(message: _error),
+                      AuthError(message: _notice, tone: BannerTone.success),
                       const SizedBox(height: 18),
                       GradientButton(
                         onPressed: _busy ? null : _submit,
@@ -120,9 +145,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       TextButton(
                         onPressed: _busy
                             ? null
-                            : () => Navigator.of(context).push(MaterialPageRoute<void>(
-                                  builder: (_) => RegisterScreen(authService: widget.authService),
-                                )),
+                            : () => _openVerification(RegisterScreen(authService: widget.authService)),
                         child: Text.rich(
                           TextSpan(
                             text: "Don't have an account? ",

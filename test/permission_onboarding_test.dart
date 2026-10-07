@@ -34,15 +34,8 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  Future<void> register(WidgetTester tester, String name, String email) async {
-    await tester.tap(find.text("Don't have an account? Register"));
-    await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextFormField).at(0), name);
-    await tester.enterText(find.byType(TextFormField).at(1), email);
-    await tester.enterText(find.byType(TextFormField).at(2), testPassword);
-    await tester.tap(find.widgetWithText(FilledButton, 'Register'));
-    await tester.pumpAndSettle();
-  }
+  Future<void> register(WidgetTester tester, String name, String email) =>
+      registerVerifyAndLogIn(tester, backend, name, email);
 
   Future<void> tapContinue(WidgetTester tester) async {
     await tester.tap(find.widgetWithText(FilledButton, 'Continue'));

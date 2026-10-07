@@ -132,6 +132,41 @@ class FakeBackend {
     return token;
   }
 
+  /// Accounts registered with a password whose email has not been verified yet.
+  final Set<String> unverified = {};
+
+  /// email -> the latest 6-digit code "emailed" to it. Only the test reads this, as the user
+  /// would read their inbox; no response ever contains a code.
+  final Map<String, String> inbox = {};
+
+  /// Codes that the next verification should treat as expired.
+  final Set<String> expiredCodes = {};
+
+  /// Every email a code was sent to, in order.
+  final List<String> codeEmails = [];
+
+  /// Every body POSTed to /api/auth/verify-email and /api/auth/resend-verification.
+  final List<Map<String, dynamic>> verifyRequests = [];
+  final List<Map<String, dynamic>> resendRequests = [];
+
+  /// When true, every request fails as if the network were down.
+  bool offline = false;
+
+  /// When set, POST /api/auth/verify-email waits for this before answering.
+  Completer<void>? verifyPending;
+
+  int _nextCode = 0;
+
+  void _sendCode(String email) {
+    // Deterministic but varied codes.
+    final code = (482913 + 7919 * _nextCode++).remainder(1000000).toString().padLeft(6, '0');
+    inbox[email] = code;
+    codeEmails.add(email);
+  }
+
+  static const invalidCode =
+      'This code is invalid or has expired. Check your latest email or request a new code.';
+
   late final MockClient client = MockClient(_handle);
 
   AppServices services(
@@ -160,6 +195,7 @@ class FakeBackend {
       );
 
   Future<http.Response> _handle(http.Request req) async {
+    if (offline) throw http.ClientException('Network is unreachable');
     final path = req.url.path;
 
     if (path == '/api/auth/login') {
@@ -174,16 +210,57 @@ class FakeBackend {
       if (user == null || body['password'] != testPassword) {
         return _json(401, {'message': 'Invalid email or password'});
       }
+      if (unverified.contains(user['id'])) {
+        // Like the server: the right password on an unverified account gets a fresh code, no JWT.
+        _sendCode(user['email'] as String);
+        return _json(403, {
+          'requiresEmailVerification': true,
+          'code': 'EMAIL_NOT_VERIFIED',
+          'message': 'Please verify your email before logging in.',
+        });
+      }
       return _json(200, {'message': 'Login successful', 'user': _authUser(user), 'token': tokenFor(user['id'])});
     }
 
     if (path == '/api/auth/register') {
       final body = jsonDecode(req.body) as Map<String, dynamic>;
-      if (users.values.any((u) => u['email'] == body['email'])) {
-        return _json(409, {'message': 'Email already registered'});
+      final email = body['email'] as String;
+      final existing = users.values.where((u) => u['email'] == email).firstOrNull;
+      // The same answer whether or not the email is taken; only unverified accounts get a code.
+      if (existing == null) {
+        final id = addUser(body['name'] as String, email);
+        unverified.add(id);
+        _sendCode(email);
+      } else if (unverified.contains(existing['id'])) {
+        _sendCode(email);
       }
-      final id = addUser(body['name'] as String, body['email'] as String);
-      return _json(201, {'message': 'Registered', 'user': _authUser(users[id]!), 'token': tokenFor(id)});
+      return _json(201, {'requiresEmailVerification': true, 'message': 'Verification code sent to your email.'});
+    }
+
+    if (path == '/api/auth/verify-email') {
+      final body = jsonDecode(req.body) as Map<String, dynamic>;
+      verifyRequests.add(body);
+      if (verifyPending != null) await verifyPending!.future;
+      if (body.keys.toSet().difference({'email', 'code'}).isNotEmpty) {
+        return _json(400, {'message': 'Validation failed'});
+      }
+      final email = body['email'] as String;
+      final code = inbox[email];
+      final user = users.values.where((u) => u['email'] == email).firstOrNull;
+      if (user == null || code == null || body['code'] != code || expiredCodes.contains(code)) {
+        return _json(400, {'message': invalidCode, 'code': 'INVALID_VERIFICATION_CODE'});
+      }
+      inbox.remove(email);
+      unverified.remove(user['id']);
+      return _json(200, {'verified': true, 'message': 'Email verified successfully.'});
+    }
+
+    if (path == '/api/auth/resend-verification') {
+      final body = jsonDecode(req.body) as Map<String, dynamic>;
+      resendRequests.add(body);
+      final user = users.values.where((u) => u['email'] == body['email']).firstOrNull;
+      if (user != null && unverified.contains(user['id'])) _sendCode(body['email'] as String);
+      return _json(200, {'message': 'If verification is required, a new code has been sent.'});
     }
 
     if (path == '/api/auth/google') {

@@ -4,7 +4,15 @@ import { prisma } from "../../lib/prisma";
 import { HttpError } from "../../lib/http-error";
 import { signAccessToken } from "../../lib/jwt";
 import { verifyGoogleIdToken } from "../../lib/google-token";
-import type { GoogleLoginInput, LoginInput, RegisterInput } from "./auth.validation";
+import { assertEmailConfigured } from "../../lib/email";
+import { issueVerificationCode, issueVerificationCodeQuietly, verifyEmailCode } from "./email-verification.service";
+import type {
+  GoogleLoginInput,
+  LoginInput,
+  RegisterInput,
+  ResendVerificationInput,
+  VerifyEmailInput,
+} from "./auth.validation";
 
 const BCRYPT_ROUNDS = 12;
 
@@ -22,33 +30,76 @@ export interface AuthResult {
 // and response timing does not reveal whether an email is registered.
 const DUMMY_HASH = bcrypt.hashSync("timing-equalisation-placeholder", BCRYPT_ROUNDS);
 
-export async function register(input: RegisterInput): Promise<AuthResult> {
-  const existing = await prisma.user.findUnique({ where: { email: input.email }, select: { id: true } });
-  if (existing) {
-    throw new HttpError(409, "Email already registered");
-  }
+/**
+ * Creates an unverified password account and emails it a verification code. No session is
+ * started: the user logs in after verifying. Returns the same way whether or not the email is
+ * already registered, so registration cannot be used to discover accounts:
+ * - a new email gets an account and a code;
+ * - an existing unverified password account gets the new name/password and a fresh code
+ *   (subject to the resend limits), and only takes effect once that code is verified;
+ * - a verified or Google account is left untouched and nothing is sent.
+ */
+export async function register(input: RegisterInput): Promise<void> {
+  // Refuse before creating anything if no code could be sent.
+  assertEmailConfigured();
 
+  // Hashed before the lookup so every branch pays the same bcrypt cost.
   const passwordHash = await bcrypt.hash(input.password, BCRYPT_ROUNDS);
 
-  try {
-    const user = await prisma.user.create({
-      data: { name: input.name, email: input.email, passwordHash },
-      select: safeUserSelect,
-    });
-    return { user, token: signAccessToken(user.id) };
-  } catch (err) {
-    // Two concurrent registrations can both pass the check above; the unique index catches it.
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-      throw new HttpError(409, "Email already registered");
+  const existing = await prisma.user.findUnique({
+    where: { email: input.email },
+    select: { id: true, email: true, emailVerified: true, passwordHash: true },
+  });
+  if (existing) {
+    if (!existing.emailVerified && existing.passwordHash) {
+      await issueVerificationCodeQuietly(existing, {
+        enforceLimits: true,
+        credentials: { name: input.name, passwordHash },
+      });
     }
+    return;
+  }
+
+  let user: { id: string; email: string };
+  try {
+    user = await prisma.user.create({
+      data: { name: input.name, email: input.email, passwordHash, emailVerified: false },
+      select: { id: true, email: true },
+    });
+  } catch (err) {
+    // A concurrent registration created it first; answer as for any existing account.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") return;
     throw err;
+  }
+  await issueVerificationCode(user, { enforceLimits: false });
+}
+
+/** Marks the account verified if the code is right. See verifyEmailCode. */
+export async function verifyEmail(input: VerifyEmailInput): Promise<void> {
+  await verifyEmailCode(input.email, input.code);
+}
+
+/** Emails a new code if the account exists and still needs verifying; silent otherwise. */
+export async function resendVerification(input: ResendVerificationInput): Promise<void> {
+  assertEmailConfigured();
+  const user = await prisma.user.findUnique({
+    where: { email: input.email },
+    select: { id: true, email: true, emailVerified: true, passwordHash: true },
+  });
+  if (user && !user.emailVerified && user.passwordHash) {
+    await issueVerificationCodeQuietly(user, { enforceLimits: true });
   }
 }
 
-export async function login(input: LoginInput): Promise<AuthResult> {
+/** The right password for an account whose email is not verified yet: no session is issued. */
+export interface VerificationRequired {
+  requiresEmailVerification: true;
+}
+
+export async function login(input: LoginInput): Promise<AuthResult | VerificationRequired> {
   const user = await prisma.user.findUnique({
     where: { email: input.email },
-    select: { ...safeUserSelect, passwordHash: true },
+    select: { ...safeUserSelect, passwordHash: true, emailVerified: true },
   });
 
   const passwordOk = await bcrypt.compare(input.password, user?.passwordHash ?? DUMMY_HASH);
@@ -62,6 +113,13 @@ export async function login(input: LoginInput): Promise<AuthResult> {
   }
   if (!user || !passwordOk) {
     throw new HttpError(401, "Invalid email or password");
+  }
+
+  if (!user.emailVerified) {
+    // The password proves this is the account owner, so it is safe to say why and send a code
+    // (unless one was sent moments ago; the rate limits apply).
+    await issueVerificationCodeQuietly(user, { enforceLimits: true });
+    return { requiresEmailVerification: true };
   }
 
   return {
@@ -95,7 +153,14 @@ export async function googleLogin(input: GoogleLoginInput): Promise<AuthResult> 
 
   try {
     const user = await prisma.user.create({
-      data: { name: identity.name, email: identity.email, googleSubject: identity.subject, passwordHash: null },
+      // Google only issues tokens with email_verified for addresses it has verified, so no code is needed.
+      data: {
+        name: identity.name,
+        email: identity.email,
+        googleSubject: identity.subject,
+        passwordHash: null,
+        emailVerified: true,
+      },
       select: safeUserSelect,
     });
     return { user, token: signAccessToken(user.id) };

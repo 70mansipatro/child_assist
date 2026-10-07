@@ -46,6 +46,25 @@ export const googleLoginSchema = z.strictObject(
   { error: "Request body must be a JSON object" },
 );
 
+// Strict: the account is named only by its email. Any other field (e.g. a userId) is refused.
+export const verifyEmailSchema = z.strictObject(
+  {
+    email: emailSchema,
+    code: z
+      .string({ error: "Verification code is required" })
+      .trim()
+      .regex(/^\d{6}$/, "Enter the 6-digit code from your email"),
+  },
+  { error: "Request body must be a JSON object" },
+);
+
+export const resendVerificationSchema = z.strictObject(
+  { email: emailSchema },
+  { error: "Request body must be a JSON object" },
+);
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type GoogleLoginInput = z.infer<typeof googleLoginSchema>;
+export type VerifyEmailInput = z.infer<typeof verifyEmailSchema>;
+export type ResendVerificationInput = z.infer<typeof resendVerificationSchema>;

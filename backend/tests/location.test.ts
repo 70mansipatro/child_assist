@@ -8,6 +8,7 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, before, describe, test } from "node:test";
 import { createApp } from "../src/app";
+import { registerVerifiedUser } from "./support/auth";
 import { prisma } from "../src/lib/prisma";
 
 let server: Server;
@@ -40,12 +41,9 @@ async function call(
 }
 
 async function registerUser(name: string): Promise<TestUser> {
-  const res = await call("POST", "/api/auth/register", {
-    body: { name, email: `phase4-${randomUUID()}@test.local`, password: "password123" },
-  });
-  assert.equal(res.status, 201, res.raw);
-  createdUserIds.push(res.json.user.id);
-  return { id: res.json.user.id, token: res.json.token };
+  const user = await registerVerifiedUser(call, name, `phase4-${randomUUID()}@test.local`);
+  createdUserIds.push(user.id);
+  return { id: user.id, token: user.token };
 }
 
 function minutesAgo(minutes: number): string {

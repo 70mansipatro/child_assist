@@ -8,6 +8,7 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, before, describe, test } from "node:test";
 import { createApp } from "../src/app";
+import { registerVerifiedUser } from "./support/auth";
 import { prisma } from "../src/lib/prisma";
 
 let server: Server;
@@ -42,12 +43,7 @@ async function call(
 }
 
 async function registerUser(name: string): Promise<TestUser> {
-  const email = `onboarding-${randomUUID()}@test.local`;
-  const res = await call("POST", "/api/auth/register", {
-    body: { name, email, password: "password123" },
-  });
-  assert.equal(res.status, 201, res.raw);
-  return { id: res.json.user.id, email, token: res.json.token };
+  return registerVerifiedUser(call, name, `onboarding-${randomUUID()}@test.local`);
 }
 
 async function onboardingFlag(user: TestUser): Promise<boolean> {

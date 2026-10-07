@@ -1,11 +1,43 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:child_assist/features/auth/screens/login_screen.dart';
+import 'package:child_assist/features/auth/screens/verify_email_screen.dart';
+
 import 'fakes.dart';
 
 /// Fills in and submits the Login screen.
 Future<void> logIn(WidgetTester tester, String email) async {
   await tester.enterText(find.byType(TextFormField).at(0), email);
+  await tester.enterText(find.byType(TextFormField).at(1), testPassword);
+  await tester.tap(find.widgetWithText(FilledButton, 'Log in'));
+  await tester.pumpAndSettle();
+}
+
+/// Opens Register from Login and submits the form. Leaves the app on Verify Email.
+Future<void> submitRegistration(WidgetTester tester, String name, String email) async {
+  await tester.tap(find.text("Don't have an account? Register"));
+  await tester.pumpAndSettle();
+  await tester.enterText(find.byType(TextFormField).at(0), name);
+  await tester.enterText(find.byType(TextFormField).at(1), email);
+  await tester.enterText(find.byType(TextFormField).at(2), testPassword);
+  await tester.tap(find.widgetWithText(FilledButton, 'Register'));
+  await tester.pumpAndSettle();
+}
+
+/// Types a code into the Verify Email screen; six digits submit it automatically.
+Future<void> enterCode(WidgetTester tester, String code) async {
+  await tester.enterText(find.byKey(const ValueKey('otp-input')), code);
+  await tester.pumpAndSettle();
+}
+
+/// The whole new-account flow: Register, enter the emailed code, back on Login with the email
+/// filled in, then log in.
+Future<void> registerVerifyAndLogIn(WidgetTester tester, FakeBackend backend, String name, String email) async {
+  await submitRegistration(tester, name, email);
+  expect(find.byType(VerifyEmailScreen), findsOneWidget);
+  await enterCode(tester, backend.inbox[email]!);
+  expect(find.byType(LoginScreen), findsOneWidget);
   await tester.enterText(find.byType(TextFormField).at(1), testPassword);
   await tester.tap(find.widgetWithText(FilledButton, 'Log in'));
   await tester.pumpAndSettle();

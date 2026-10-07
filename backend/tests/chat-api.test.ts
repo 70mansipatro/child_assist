@@ -12,6 +12,7 @@ import type { LanguageModelV4CallOptions, LanguageModelV4GenerateResult } from "
 import { MockLanguageModelV4 } from "ai/test";
 import { PermissionStatus, PermissionType } from "../generated/prisma/client";
 import { createApp } from "../src/app";
+import { registerVerifiedUser } from "./support/auth";
 import { prisma } from "../src/lib/prisma";
 import { clearPendingActions } from "../src/modules/chat/actions/pending-actions";
 import { setChatModels } from "../src/modules/chat/ai/models";
@@ -54,12 +55,9 @@ async function call(
 }
 
 async function registerUser(name: string): Promise<TestUser> {
-  const res = await call("POST", "/api/auth/register", {
-    body: { name, email: `phase7-api-${randomUUID()}@test.local`, password: "password123" },
-  });
-  assert.equal(res.status, 201, res.raw);
-  createdUserIds.push(res.json.user.id);
-  return { id: res.json.user.id, token: res.json.token, name };
+  const user = await registerVerifiedUser(call, name, `phase7-api-${randomUUID()}@test.local`);
+  createdUserIds.push(user.id);
+  return { id: user.id, token: user.token, name };
 }
 
 async function setPermission(user: TestUser, permission: PermissionType, status: PermissionStatus) {

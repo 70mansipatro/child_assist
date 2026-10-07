@@ -20,6 +20,10 @@ model User {
   // Google's stable account ID (the verified ID token's `sub`), for accounts that sign in with
   // Google. Never the email, and no Google tokens are stored.
   googleSubject   String?  @unique @map("google_subject")
+  // Password accounts must prove they own the address (6-digit emailed code) before they can log
+  // in. Google accounts are verified by Google, and accounts created before verification existed
+  // were marked verified by the email_verification migration.
+  emailVerified   Boolean  @default(false) @map("email_verified")
   // Reference to an externally hosted image only; image bytes are never stored in the database.
   profileImageUrl String?  @map("profile_image_url")
   // Whether the user has been through the first-time permission walkthrough once. Separate from
@@ -33,7 +37,28 @@ model User {
   chatConversations ChatConversation[]
   chatToolCalls     ChatToolCall[]
 
+  emailVerificationCodes EmailVerificationCode[]
+
   @@map("users")
+}
+
+// One-time codes emailed to verify a password account's address. Only an HMAC of the code is
+// stored, never the code. A code is spent when consumedAt is set: on successful verification, or
+// when a newer code replaces it. It is also dead once expired or after 5 wrong attempts.
+model EmailVerificationCode {
+  id         String    @id @default(cuid())
+  userId     String    @map("user_id") @db.Uuid
+  codeHash   String    @map("code_hash") @db.VarChar(64)
+  expiresAt  DateTime  @map("expires_at")
+  attempts   Int       @default(0)
+  consumedAt DateTime? @map("consumed_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("email_verification_codes")
 }
 
 enum PermissionType {

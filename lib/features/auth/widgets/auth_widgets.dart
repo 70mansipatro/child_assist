@@ -79,11 +79,12 @@ class AuthBrand extends StatelessWidget {
   }
 }
 
-/// A form-level error that slides open beneath the fields.
+/// A form-level message (an error by default) that slides open beneath the fields.
 class AuthError extends StatelessWidget {
-  const AuthError({super.key, required this.message});
+  const AuthError({super.key, required this.message, this.tone = BannerTone.danger});
 
   final String? message;
+  final BannerTone tone;
 
   @override
   Widget build(BuildContext context) {
@@ -95,7 +96,7 @@ class AuthError extends StatelessWidget {
           ? const SizedBox(width: double.infinity)
           : Padding(
               padding: const EdgeInsets.only(top: 14),
-              child: InfoBanner(tone: BannerTone.danger, message: Text(message!)),
+              child: InfoBanner(tone: tone, message: Text(message!)),
             ),
     );
   }
