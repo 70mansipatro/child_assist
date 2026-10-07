@@ -1,6 +1,9 @@
 import 'package:flutter/foundation.dart';
 
 import '../../../core/api/api_client.dart';
+import '../../contacts/services/message_handoff.dart';
+import '../../documents/models/document_item.dart';
+import '../data/chat_api.dart' show ActionOutcome;
 import '../models/chat_message.dart';
 import 'chat_service.dart';
 
@@ -39,9 +42,12 @@ class ChatError {
 /// The conversation shown on the chat screen: its messages, whether Child Assist is answering,
 /// and the last error. Typed and spoken messages both go through [send].
 class ChatSession extends ChangeNotifier {
-  ChatSession({required ChatService service}) : _service = service;
+  ChatSession({required ChatService service, MessageHandoff handoff = const NativeMessageHandoff()})
+    : _service = service,
+      _handoff = handoff;
 
   final ChatService _service;
+  final MessageHandoff _handoff;
 
   String? _conversationId;
   String? _title;
@@ -179,41 +185,160 @@ class ChatSession extends ChangeNotifier {
     if (id == _conversationId) newChat();
   }
 
-  /// Runs an action after the user tapped Confirm. Nothing is ever sent without this.
-  Future<void> confirmAction(String actionId) => _resolveAction(actionId, confirm: true);
-
-  /// Declines an action; nothing is sent.
-  Future<void> cancelAction(String actionId) => _resolveAction(actionId, confirm: false);
-
-  Future<void> _resolveAction(String actionId, {required bool confirm}) async {
-    _updateAction(
-      actionId,
-      (a) => a.copyWith(state: confirm ? PendingActionState.confirming : PendingActionState.cancelling),
-    );
+  /// Sets who an action goes to: the one contact address the user picked on this phone (or
+  /// typed). Returns an error to show, or null when the server accepted it.
+  Future<String?> chooseRecipient(String actionId, {required String address, String? name}) async {
     try {
-      final outcome = confirm ? await _service.confirmAction(actionId) : await _service.cancelAction(actionId);
+      final server = await _service.chooseRecipient(
+        actionId,
+        address: address,
+        name: name,
+        conversationId: _conversationId,
+      );
+      _updateAction(actionId, (a) => a.updatedFrom(server));
+      return null;
+    } on ApiException catch (e) {
+      if (e.statusCode == 410) {
+        _updateAction(actionId, (a) => a.copyWith(state: PendingActionState.failed, resultMessage: e.message));
+      }
+      return e.statusCode == null ? 'Check your internet connection and try again.' : e.message;
+    }
+  }
+
+  /// Runs an action after the user tapped Confirm. Nothing is ever sent without this.
+  ///
+  /// An email is sent by the server. A WhatsApp message is opened in WhatsApp with the text
+  /// ready, and the user sends it there: it is never reported as sent. For a document share,
+  /// [document] is the file the user picked on this phone.
+  Future<void> confirmAction(String actionId, {DocumentItem? document}) async {
+    _updateAction(actionId, (a) => a.copyWith(state: PendingActionState.confirming));
+    final ActionOutcome outcome;
+    try {
+      outcome = await _service.confirmAction(actionId, conversationId: _conversationId);
+    } catch (e) {
+      _updateAction(actionId, (a) => a.copyWith(state: PendingActionState.failed, resultMessage: _failure(e)));
+      return;
+    }
+
+    final handoff = outcome.handoff;
+    if (!outcome.confirmed || handoff == null) {
       _updateAction(
         actionId,
         (a) => a.copyWith(
-          state: outcome.cancelled
-              ? PendingActionState.cancelled
-              : outcome.succeeded
-                  ? PendingActionState.done
-                  : PendingActionState.failed,
-          resultMessage: outcome.message,
+          state: outcome.completed ? PendingActionState.done : PendingActionState.failed,
+          resultMessage: outcome.message.isNotEmpty ? outcome.message : 'Something went wrong. Nothing was sent.',
+        ),
+      );
+      return;
+    }
+
+    _updateAction(actionId, (a) => a.copyWith(state: PendingActionState.handingOff, handoff: handoff));
+    _documents[actionId] = document;
+    final result = document != null
+        ? await _handoff.shareDocument(
+            reference: document.reference,
+            mimeType: document.mimeType ?? document.type.mimeType,
+            text: handoff.message.isEmpty ? null : handoff.message,
+            phone: handoff.phone,
+            toWhatsApp: true,
+          )
+        : await _handoff.openWhatsApp(phone: handoff.phone, text: handoff.message);
+
+    if (result == HandoffResult.opened) {
+      await _finishHandoff(actionId, 'whatsapp_opened', whatsApp: true);
+    } else {
+      await _report(actionId, 'unavailable');
+      _updateAction(
+        actionId,
+        (a) => a.copyWith(
+          state: PendingActionState.whatsAppUnavailable,
+          resultMessage: "WhatsApp isn't available on this device.",
+        ),
+      );
+    }
+  }
+
+  // The document picked for a WhatsApp share, kept for the share-sheet fallback.
+  final Map<String, DocumentItem?> _documents = {};
+
+  /// After WhatsApp was unavailable: offers the same confirmed message through the share sheet.
+  Future<void> shareInstead(String actionId) async {
+    final handoff = _findAction(actionId)?.handoff;
+    if (handoff == null) return;
+    _updateAction(actionId, (a) => a.copyWith(state: PendingActionState.handingOff));
+    final document = _documents[actionId];
+    final result = document != null
+        ? await _handoff.shareDocument(
+            reference: document.reference,
+            mimeType: document.mimeType ?? document.type.mimeType,
+            text: handoff.message.isEmpty ? null : handoff.message,
+          )
+        : await _handoff.shareText(handoff.message);
+    if (result == HandoffResult.opened) {
+      await _finishHandoff(actionId, 'share_opened', whatsApp: false);
+    } else {
+      _updateAction(
+        actionId,
+        (a) => a.copyWith(
+          state: PendingActionState.failed,
+          resultMessage: "Sharing isn't available on this device. Nothing was sent.",
+        ),
+      );
+    }
+  }
+
+  /// Declines an action; nothing is sent.
+  Future<void> cancelAction(String actionId) async {
+    _updateAction(actionId, (a) => a.copyWith(state: PendingActionState.cancelling));
+    try {
+      final outcome = await _service.cancelAction(actionId, conversationId: _conversationId);
+      _updateAction(
+        actionId,
+        (a) => a.copyWith(
+          state: PendingActionState.cancelled,
+          resultMessage: outcome.message.isNotEmpty ? outcome.message : "Okay, I didn't send anything.",
         ),
       );
     } catch (e) {
-      if (!confirm) {
-        // Even if the server could not be told, nothing is sent without a confirmation.
-        _updateAction(actionId, (a) => a.copyWith(state: PendingActionState.cancelled, resultMessage: 'Cancelled.'));
-        return;
-      }
-      final message = e is ApiException && (e.statusCode == 409 || e.statusCode == 410)
-          ? e.message
-          : 'Something went wrong. Nothing was sent.';
-      _updateAction(actionId, (a) => a.copyWith(state: PendingActionState.failed, resultMessage: message));
+      // Even if the server could not be told, nothing is sent without a confirmation.
+      _updateAction(actionId, (a) => a.copyWith(state: PendingActionState.cancelled, resultMessage: 'Cancelled.'));
     }
+  }
+
+  /// Records that WhatsApp (or the share sheet) opened. Never says the message was sent: the
+  /// user sends it there.
+  Future<void> _finishHandoff(String actionId, String result, {required bool whatsApp}) async {
+    final name = _findAction(actionId)?.recipientName ?? 'your contact';
+    var message = whatsApp
+        ? 'WhatsApp opened for $name with your message. Tap Send in WhatsApp to deliver it.'
+        : 'Share options opened for $name. Nothing is sent until you send it from the app you choose.';
+    try {
+      final outcome = await _service.reportHandoff(actionId, result, conversationId: _conversationId);
+      if (outcome.message.isNotEmpty) message = outcome.message;
+    } catch (_) {
+      // It did open; the report only updates the chat history.
+    }
+    _documents.remove(actionId);
+    _updateAction(actionId, (a) => a.copyWith(state: PendingActionState.done, resultMessage: message));
+  }
+
+  Future<void> _report(String actionId, String result) async {
+    try {
+      await _service.reportHandoff(actionId, result, conversationId: _conversationId);
+    } catch (_) {}
+  }
+
+  static String _failure(Object e) => e is ApiException && (e.statusCode == 409 || e.statusCode == 410)
+      ? e.message
+      : 'Something went wrong. Nothing was sent.';
+
+  PendingAction? _findAction(String actionId) {
+    for (final m in _messages) {
+      for (final a in m.pendingActions) {
+        if (a.id == actionId) return a;
+      }
+    }
+    return null;
   }
 
   void _updateAction(String actionId, PendingAction Function(PendingAction) update) {

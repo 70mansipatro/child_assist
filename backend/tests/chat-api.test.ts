@@ -15,14 +15,13 @@ import { createApp } from "../src/app";
 import { registerVerifiedUser } from "./support/auth";
 import { PERIODS, expectedRange, localInstant, localToday, shiftDays } from "./support/dates";
 import { prisma } from "../src/lib/prisma";
-import { clearPendingActions } from "../src/modules/chat/actions/pending-actions";
+import { emailAvailable } from "../src/lib/email";
 import { setChatModels } from "../src/modules/chat/ai/models";
 import { chatSettings } from "../src/modules/chat/chat.orchestrator";
 import {
   configureChatProviders,
   resetChatProviders,
   type DeviceGateway,
-  type OutgoingMessage,
 } from "../src/modules/chat/tools/providers";
 
 let server: Server;
@@ -166,7 +165,6 @@ before(async () => {
 afterEach(() => {
   setChatModels(null);
   resetChatProviders();
-  clearPendingActions();
 });
 
 after(async () => {
@@ -324,7 +322,11 @@ describe("chat API: assistant identity", () => {
     assert.match(can.json.response, /location history/);
     // Nothing that is not configured is claimed.
     assert.match(can.json.response, /can't .*search the web/);
-    assert.match(can.json.response, /send messages or emails/);
+    assert.match(can.json.response, /phone contacts/);
+    assert.match(can.json.response, /WhatsApp .*you to send/);
+    // Email is only offered when the server's SMTP is configured.
+    if (emailAvailable()) assert.match(can.json.response, /• prepare emails/);
+    else assert.match(can.json.response, /can't .*send emails/);
     assert.doesNotMatch(can.json.response, /• search the web/);
   });
 });
@@ -601,88 +603,7 @@ describe("chat API: guardrails and secrets", () => {
   });
 });
 
-describe("chat API: confirmation-required actions", () => {
-  test("without a communication provider nothing is prepared or sent", async () => {
-    setChatModels({ chat: toolEcho("send_email", { to: "Mansi", subject: "Hi", body: "Hello" }) });
-    const res = await chat(userA, { message: "Email Mansi hello" });
-    assert.match(res.json.response, /ACTION_NOT_CONFIGURED/);
-    assert.deepEqual(res.json.pendingActions, []);
-  });
-
-  test("share_location waits for explicit confirmation, then runs exactly once", async () => {
-    await setPermission(userA, PermissionType.LOCATION, PermissionStatus.GRANTED);
-    const sent: OutgoingMessage[] = [];
-    configureChatProviders({
-      communication: {
-        send: async (_userId, message) => {
-          sent.push(message);
-          return { delivered: true };
-        },
-      },
-    });
-    // The model even claims it already sent it; that claim must not reach the user.
-    setChatModels({
-      chat: model((seen) => (seen.toolResult ? text("I've sent your location details to Mansi!") : toolCall("share_location", { to: "Mansi" }))),
-    });
-
-    const res = await chat(userA, { message: "Send my visited location details to Mansi" });
-    assert.equal(res.status, 200, res.raw);
-    assert.equal(sent.length, 0, "nothing is sent during the chat turn");
-    assert.equal(res.json.pendingActions.length, 1);
-    const action = res.json.pendingActions[0];
-    assert.equal(action.toolName, "share_location");
-    assert.equal(action.summary, "Send your location details to Mansi?");
-    assert.deepEqual(res.json.toolEvents, [{ kind: "send_action", status: "confirmation_required" }]);
-    assert.doesNotMatch(res.json.response, /I've sent/);
-    assert.match(res.json.response, /nothing has been sent/i);
-
-    const audit = await prisma.chatToolCall.findUniqueOrThrow({ where: { id: action.id } });
-    assert.equal(audit.status, "AWAITING_CONFIRMATION");
-    assert.equal(audit.confirmationRequired, true);
-    assert.equal(audit.confirmed, false);
-
-    // Another user cannot confirm or cancel it.
-    assert.equal((await call("POST", `/api/chat/actions/${action.id}/confirm`, { token: userB.token })).status, 404);
-    assert.equal((await call("POST", `/api/chat/actions/${action.id}/cancel`, { token: userB.token })).status, 404);
-    assert.equal(sent.length, 0);
-
-    const confirmed = await call("POST", `/api/chat/actions/${action.id}/confirm`, { token: userA.token });
-    assert.equal(confirmed.status, 200, confirmed.raw);
-    assert.equal(confirmed.json.action.status, "SUCCEEDED");
-    assert.equal(sent.length, 1);
-    assert.equal(sent[0].to, "Mansi");
-    assert.match(sent[0].body, /Asha's School/);
-    assert.doesNotMatch(sent[0].body, /Bilal/);
-
-    const again = await call("POST", `/api/chat/actions/${action.id}/confirm`, { token: userA.token });
-    assert.equal(again.status, 409, again.raw);
-    assert.equal(sent.length, 1, "a second confirmation never sends twice");
-
-    const after = await prisma.chatToolCall.findUniqueOrThrow({ where: { id: action.id } });
-    assert.equal(after.status, "SUCCEEDED");
-    assert.equal(after.confirmed, true);
-    // The audit row holds no recipient or content.
-    assert.doesNotMatch(JSON.stringify(after), /Mansi|School/);
-  });
-
-  test("a cancelled action can never run", async () => {
-    const sent: OutgoingMessage[] = [];
-    configureChatProviders({ communication: { send: async (_u, m) => (sent.push(m), { delivered: true }) } });
-    setChatModels({
-      chat: model((seen) => (seen.toolResult ? text("Please confirm.") : toolCall("send_email", { to: "teacher@school.test", subject: "Homework", body: "Done!" }))),
-    });
-
-    const res = await chat(userA, { message: "Email my teacher that my homework is done" });
-    const id = res.json.pendingActions[0].id;
-    assert.equal(res.json.pendingActions[0].summary, 'Send an email to teacher@school.test with the subject "Homework"?');
-
-    const cancelled = await call("POST", `/api/chat/actions/${id}/cancel`, { token: userA.token });
-    assert.equal(cancelled.status, 200, cancelled.raw);
-    assert.equal(cancelled.json.action.status, "CANCELLED");
-    assert.equal((await call("POST", `/api/chat/actions/${id}/confirm`, { token: userA.token })).status, 409);
-    assert.equal(sent.length, 0);
-  });
-});
+// Email and WhatsApp actions (prepare, confirm, cancel, expiry) are covered in chat-actions.test.ts.
 
 describe("chat API: AI failures", () => {
   test("a failing model gives 503 without details and rolls the turn back", async () => {

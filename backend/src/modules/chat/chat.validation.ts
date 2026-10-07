@@ -34,3 +34,25 @@ export const listConversationsQuerySchema = z.strictObject({
 });
 
 export const idParamsSchema = z.strictObject({ id });
+
+// Action calls. Strict: a userId (or anything else) in the body is rejected outright.
+export const actionScopeSchema = z.strictObject({
+  conversationId: id.optional(),
+});
+
+/** The one contact address the user picked on the phone for this action, never an address book. */
+export const actionRecipientSchema = z.strictObject({
+  conversationId: id.optional(),
+  name: z
+    .string()
+    .trim()
+    .max(120)
+    .regex(/^[^\r\n\t<>"]*$/, "Invalid name")
+    .optional(),
+  address: z.string({ error: "address is required" }).trim().min(1).max(320),
+});
+
+export const actionHandoffSchema = z.strictObject({
+  conversationId: id.optional(),
+  result: z.enum(["whatsapp_opened", "share_opened", "unavailable"]),
+});

@@ -49,7 +49,7 @@ void main() {
   void expectStep(int index) {
     expect(onboarding(), findsOneWidget);
     expect(stepTitle(index), findsOneWidget);
-    expect(find.text('${index + 1} of 5'), findsOneWidget);
+    expect(find.text('${index + 1} of ${permissionOnboardingSteps.length}'), findsOneWidget);
   }
 
   String? newUserId() =>
@@ -57,7 +57,7 @@ void main() {
           as String?;
 
   testWidgets(
-    '1, 3-7, 9, 12. a new account goes through the five permissions in order, then Home',
+    '1, 3-7, 9, 12. a new account goes through the six permissions in order, then Home',
     (tester) async {
       await startApp(tester);
       await register(tester, 'New Kid', 'new@example.com');
@@ -70,6 +70,7 @@ void main() {
         AppPermission.microphone,
         AppPermission.photos,
         AppPermission.notifications,
+        AppPermission.contacts,
       ];
       for (var i = 0; i < expected.length; i++) {
         expectStep(i);
@@ -88,6 +89,7 @@ void main() {
         'MICROPHONE': 'GRANTED',
         'PHOTOS': 'GRANTED',
         'NOTIFICATIONS': 'GRANTED',
+        'CONTACTS': 'GRANTED',
       });
       // Completion is recorded once, after the last permission was saved.
       expect(backend.patches.last, 'PATCH /api/profile/permission-onboarding true ($id)');
@@ -114,10 +116,11 @@ void main() {
     os.onRequest[AppPermission.microphone] = PermissionState.denied;
     os.onRequest[AppPermission.photos] = PermissionState.limited;
     os.onRequest[AppPermission.notifications] = PermissionState.denied;
+    os.onRequest[AppPermission.contacts] = PermissionState.denied;
     await register(tester, 'New Kid', 'new@example.com');
     final id = newUserId()!;
 
-    for (var i = 0; i < 5; i++) {
+    for (var i = 0; i < permissionOnboardingSteps.length; i++) {
       expectStep(i);
       await tapContinue(tester);
     }
@@ -129,6 +132,7 @@ void main() {
       'MICROPHONE': 'DENIED',
       'PHOTOS': 'LIMITED',
       'NOTIFICATIONS': 'DENIED',
+      'CONTACTS': 'DENIED',
     });
     expect(backend.users[id]!['permissionOnboardingCompleted'], isTrue);
   });
@@ -198,11 +202,11 @@ void main() {
     expect(backend.permissions[id]!['LOCATION'], 'GRANTED');
     expect(os.dialogsShown, [AppPermission.location], reason: 'retry does not ask the OS again');
 
-    for (var i = 1; i < 4; i++) {
+    for (var i = 1; i < permissionOnboardingSteps.length - 1; i++) {
       await tapContinue(tester);
     }
     backend.onboardingFailures = 2;
-    await tapContinue(tester); // notifications, then the completion save fails
+    await tapContinue(tester); // contacts, then the completion save fails
 
     expect(home(), findsNothing);
     expect(find.textContaining('Could not finish setup'), findsOneWidget);
@@ -217,7 +221,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(home(), findsOneWidget);
     expect(backend.users[id]!['permissionOnboardingCompleted'], isTrue);
-    expect(os.dialogsShown, hasLength(5));
+    expect(os.dialogsShown, hasLength(permissionOnboardingSteps.length));
   });
 
   testWidgets('14. the Permissions screen still lets a denied permission be allowed later', (
@@ -227,7 +231,7 @@ void main() {
     os.onRequest[AppPermission.camera] = PermissionState.denied;
     await register(tester, 'New Kid', 'new@example.com');
     final id = newUserId()!;
-    for (var i = 0; i < 5; i++) {
+    for (var i = 0; i < permissionOnboardingSteps.length; i++) {
       await tapContinue(tester);
     }
     expect(backend.permissions[id]!['CAMERA'], 'DENIED');
@@ -248,7 +252,7 @@ void main() {
   ) async {
     await startApp(tester);
     await register(tester, 'New Kid', 'new@example.com');
-    for (var i = 0; i < 5; i++) {
+    for (var i = 0; i < permissionOnboardingSteps.length; i++) {
       await tapContinue(tester);
     }
     expect(home(), findsOneWidget);
@@ -275,7 +279,7 @@ void main() {
     await logIn(tester, 'old@example.com');
     expectStep(0);
     expect(home(), findsNothing);
-    for (var i = 0; i < 5; i++) {
+    for (var i = 0; i < permissionOnboardingSteps.length; i++) {
       await tapContinue(tester);
     }
     expect(home(), findsOneWidget);
@@ -298,9 +302,9 @@ void main() {
     await startApp(tester, reuseBackend: backend, reuseOs: os);
     expectStep(2);
     expect(os.dialogsShown, [AppPermission.location, AppPermission.camera]);
-    await tapContinue(tester);
-    await tapContinue(tester);
-    await tapContinue(tester);
+    for (var i = 2; i < permissionOnboardingSteps.length; i++) {
+      await tapContinue(tester);
+    }
     expect(home(), findsOneWidget);
     expect(backend.permissions[id], {
       'LOCATION': 'DENIED',
@@ -308,6 +312,7 @@ void main() {
       'MICROPHONE': 'GRANTED',
       'PHOTOS': 'GRANTED',
       'NOTIFICATIONS': 'GRANTED',
+      'CONTACTS': 'GRANTED',
     });
   });
 

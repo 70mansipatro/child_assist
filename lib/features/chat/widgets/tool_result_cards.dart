@@ -1,33 +1,54 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/widgets/widgets.dart';
+import '../../contacts/services/contact_service.dart';
 import '../../documents/services/document_service.dart';
 import '../../documents/widgets/document_card.dart' show DocumentTypeBadge, documentDateText;
 import '../../photos/services/photo_gallery_service.dart';
 import '../../photos/widgets/photo_grid.dart' show PhotoThumbnail;
 import '../models/chat_message.dart';
+import 'contact_result_card.dart';
+
+/// Sets an action's recipient; returns an error to show, or null on success.
+typedef ChooseRecipient = Future<String?> Function(String actionId, {required String address, String? name});
 
 /// What the result cards need from the screen: the on-device services and navigation.
 class ChatResultContext {
   const ChatResultContext({
     required this.documentService,
     required this.galleryService,
+    required this.contactService,
     required this.onOpenPermissions,
+    required this.onOpenSettings,
     required this.onOpenDocuments,
     required this.onOpenDocument,
     required this.onOpenPhoto,
+    required this.onChooseRecipient,
     required this.onConfirmAction,
     required this.onCancelAction,
+    required this.onShareInstead,
   });
 
   final DocumentService documentService;
   final PhotoGalleryService galleryService;
+
+  /// Searches the phone's contacts locally; nothing found is uploaded.
+  final ContactService contactService;
   final VoidCallback onOpenPermissions;
+
+  /// This app's page in the phone's Settings, for a permission that is blocked.
+  final VoidCallback onOpenSettings;
   final VoidCallback onOpenDocuments;
   final ValueChanged<DocumentItem> onOpenDocument;
   final ValueChanged<PhotoItem> onOpenPhoto;
-  final ValueChanged<String> onConfirmAction;
+  final ChooseRecipient onChooseRecipient;
+
+  /// Confirms an action; [document] is the file picked for a document share.
+  final void Function(String actionId, DocumentItem? document) onConfirmAction;
   final ValueChanged<String> onCancelAction;
+
+  /// After WhatsApp turned out to be unavailable: the share sheet instead.
+  final ValueChanged<String> onShareInstead;
 }
 
 /// The card to show under a reply for [event], or null when the text says it all.
@@ -44,6 +65,12 @@ Widget? toolResultCard(ChatToolEvent event, ChatResultContext context) {
       LocationResultsCard(places: event.locations),
     (ChatToolKind.documents, ChatToolStatus.deviceLookup) => DocumentResultsCard(query: event.query, results: context),
     (ChatToolKind.photos, ChatToolStatus.deviceLookup) => PhotoResultsCard(query: event.query, results: context),
+    (ChatToolKind.contacts, ChatToolStatus.deviceLookup) => ContactLookupCard(
+      query: event.query,
+      contactService: context.contactService,
+      onOpenPermissions: context.onOpenPermissions,
+      onOpenSettings: context.onOpenSettings,
+    ),
     _ => null,
   };
 }
@@ -52,6 +79,7 @@ ChatPermission _permissionFor(ChatToolKind kind) => switch (kind) {
       ChatToolKind.locationHistory || ChatToolKind.currentLocation => ChatPermission.location,
       ChatToolKind.photos => ChatPermission.photos,
       ChatToolKind.documents || ChatToolKind.documentText => ChatPermission.documents,
+      ChatToolKind.contacts => ChatPermission.contacts,
       _ => ChatPermission.other,
     };
 
@@ -83,6 +111,7 @@ class PermissionRequiredCard extends StatelessWidget {
         ChatToolKind.photos => "I can't access your photos because Photos permission is turned off.",
         ChatToolKind.documents || ChatToolKind.documentText =>
           "I can't access your documents because Documents access is turned off.",
+        _ when permission == ChatPermission.contacts => 'I need Contacts permission to search your phone contacts.',
         _ => '${permission.label} permission is turned off.',
       };
 
@@ -162,6 +191,26 @@ class LocationResultsCard extends StatelessWidget {
   }
 }
 
+const _ignoredDocumentWords = {'my', 'the', 'a', 'an', 'all', 'file', 'files', 'document', 'documents', 'doc', 'docs'};
+
+/// The documents whose name matches [text] (and [type], e.g. "PDF"): files matching every word
+/// ("math notes") if any, otherwise any of the words. All of them when [text] has no words.
+List<DocumentItem> matchDocuments(List<DocumentItem> documents, {String? text, String? type, int limit = 10}) {
+  final wanted = type?.toLowerCase();
+  final typed = wanted == null ? documents : documents.where((d) => d.type.extension == wanted).toList();
+  final words = (text ?? '')
+      .toLowerCase()
+      .split(RegExp(r'[^a-z0-9]+'))
+      .where((w) => w.length > 1 && !_ignoredDocumentWords.contains(w))
+      .toList();
+  if (words.isEmpty) return typed.take(limit).toList();
+
+  String normalize(String name) => name.toLowerCase().replaceAll(RegExp(r'[_\-.]+'), ' ');
+  var matches = typed.where((d) => words.every(normalize(d.name).contains)).toList();
+  if (matches.isEmpty) matches = typed.where((d) => words.any(normalize(d.name).contains)).toList();
+  return matches.take(limit).toList();
+}
+
 /// Documents on this phone matching what the user asked for. The search runs locally over the
 /// documents the user added (each one granted by the OS file picker); nothing is uploaded.
 class DocumentResultsCard extends StatefulWidget {
@@ -177,27 +226,12 @@ class DocumentResultsCard extends StatefulWidget {
 class _DocumentResultsCardState extends State<DocumentResultsCard> {
   late final Future<List<DocumentItem>> _matches = _search();
 
-  Future<List<DocumentItem>> _search() async {
-    final documents = await widget.results.documentService.list();
-    final type = widget.query.type?.toLowerCase();
-    final typed = type == null ? documents : documents.where((d) => d.type.extension == type).toList();
-    final words = _words(widget.query.text);
-    if (words.isEmpty) return typed.take(widget.query.limit ?? 10).toList();
-
-    String normalize(String name) => name.toLowerCase().replaceAll(RegExp(r'[_\-.]+'), ' ');
-    // Prefer files matching every word ("math notes"), else any of them.
-    var matches = typed.where((d) => words.every(normalize(d.name).contains)).toList();
-    if (matches.isEmpty) matches = typed.where((d) => words.any(normalize(d.name).contains)).toList();
-    return matches.take(widget.query.limit ?? 10).toList();
-  }
-
-  static const _ignored = {'my', 'the', 'a', 'an', 'all', 'file', 'files', 'document', 'documents', 'doc', 'docs'};
-
-  static List<String> _words(String? text) => (text ?? '')
-      .toLowerCase()
-      .split(RegExp(r'[^a-z0-9]+'))
-      .where((w) => w.length > 1 && !_ignored.contains(w))
-      .toList();
+  Future<List<DocumentItem>> _search() async => matchDocuments(
+    await widget.results.documentService.list(),
+    text: widget.query.text,
+    type: widget.query.type,
+    limit: widget.query.limit ?? 10,
+  );
 
   @override
   Widget build(BuildContext context) {

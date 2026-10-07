@@ -89,46 +89,21 @@ export interface WebSearchProvider {
   searchWeb(query: string): Promise<WebResult[]>;
 }
 
-// ---------------------------------------------------------------------------------------------
-// Contacts and outgoing messages. Sending always goes through a user confirmation first (see
-// actions/pending-actions.ts); providers are only ever called after that confirmation.
-
-export interface Contact {
-  name: string;
-  email?: string | null;
-}
-
-export interface ContactsProvider {
-  findContacts(userId: string, query: string): Promise<Contact[]>;
-}
-
-export interface OutgoingMessage {
-  /** A contact name or email address, as the user gave it. */
-  to: string;
-  subject: string;
-  body: string;
-  /** For share_document: the device document to attach. */
-  documentId?: string;
-}
-
-export interface CommunicationProvider {
-  send(userId: string, message: OutgoingMessage): Promise<{ delivered: boolean }>;
-}
+// Phone contacts are deliberately not a provider: the address book never leaves the phone. The
+// app searches it locally (find_contact) and only sends back the one address the user picks for
+// an action. Email goes out through the backend's SMTP (actions/email.service.ts) and WhatsApp
+// messages are opened on the phone for the user to send, both only after confirmation.
 
 // ---------------------------------------------------------------------------------------------
 
 export interface ChatProviders {
   device: DeviceGateway;
   webSearch: WebSearchProvider | null;
-  contacts: ContactsProvider | null;
-  communication: CommunicationProvider | null;
 }
 
 const defaults: ChatProviders = {
   device: unavailableDevice,
   webSearch: null,
-  contacts: null,
-  communication: null,
 };
 
 let current: ChatProviders = { ...defaults };

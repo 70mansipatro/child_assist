@@ -12,8 +12,10 @@ export type ToolErrorCode =
   | "DOCUMENT_UNAVAILABLE"
   | "TEXT_EXTRACTION_UNAVAILABLE"
   | "WEB_SEARCH_NOT_CONFIGURED"
-  | "CONTACTS_NOT_CONFIGURED"
   | "ACTION_NOT_CONFIGURED"
+  | "INVALID_RECIPIENT"
+  | "NOTHING_TO_SHARE"
+  | "NOT_SUPPORTED"
   | "INVALID_ARGUMENTS"
   | "TOOL_FAILED";
 
@@ -34,12 +36,34 @@ export function fail(code: ToolErrorCode, message: string, extra: { permission?:
   return { success: false, code, message, ...extra };
 }
 
-/** A side-effect action the assistant prepared; nothing happens until the user confirms it. */
+/**
+ * A side-effect action the assistant prepared; nothing happens until the user confirms it.
+ * Everything here is written by the backend, not the model, so the confirmation the user sees
+ * cannot be manipulated, and it is exactly what will be sent.
+ */
 export interface PendingActionView {
   id: string;
+  /** The tool that prepared it, e.g. "prepare_email". */
   toolName: string;
-  /** Built by the backend, not the model, so the confirmation text cannot be manipulated. */
+  type: "SEND_EMAIL" | "SEND_WHATSAPP" | "SHARE_LOCATION" | "SHARE_TRAVEL_HISTORY" | "SHARE_DOCUMENT";
+  channel: "EMAIL" | "WHATSAPP";
+  status: "PENDING" | "CONFIRMED" | "CANCELLED" | "COMPLETED" | "FAILED" | "EXPIRED";
   summary: string;
+  /**
+   * The contact name to look up on the phone while [recipientAddress] is null. The app searches
+   * its own contacts and sends back only the one address the user picks.
+   */
+  contactQuery: string | null;
+  /** Which contact field the app must resolve: an email address or a phone number. */
+  recipientField: "email" | "phone";
+  recipientName: string | null;
+  recipientAddress: string | null;
+  subject: string | null;
+  message: string | null;
+  /** The kind of sensitive data included, e.g. "Today's travel history (3 saved locations)". */
+  dataSummary: string | null;
+  /** For a document share: the document name to match among the documents on the phone. */
+  documentQuery: string | null;
   expiresAt: string;
 }
 

@@ -17,6 +17,9 @@ import 'package:child_assist/features/auth/data/token_storage.dart';
 import 'package:child_assist/features/auth/services/google_auth_service.dart';
 import 'package:child_assist/features/chat/services/text_to_speech_service.dart';
 import 'package:child_assist/features/chat/services/voice_input.dart';
+import 'package:child_assist/features/contacts/models/contact_item.dart';
+import 'package:child_assist/features/contacts/services/contact_service.dart';
+import 'package:child_assist/features/contacts/services/message_handoff.dart';
 import 'package:child_assist/features/documents/services/document_service.dart';
 import 'package:child_assist/features/location/models/automatic_tracking.dart';
 import 'package:child_assist/features/location/services/background_location_source.dart';
@@ -136,8 +139,21 @@ class FakeBackend {
   /// Decides the assistant's reply. Defaults to the fixed name answer or an echo.
   FakeChatReply Function(String message)? chatResponder;
 
-  /// Every action call, e.g. "confirm act1" or "cancel act1".
+  /// Every action call, e.g. "confirm act1", "cancel act1", "recipient act1" or
+  /// "handoff act1 whatsapp_opened".
   final List<String> chatActions = [];
+
+  /// Every action request body, in order (to check that only one address is ever sent).
+  final List<Map<String, dynamic>> chatActionBodies = [];
+
+  /// actionId -> the action as this fake server keeps it, plus its owner ('userId').
+  final Map<String, Map<String, dynamic>> chatActionStore = {};
+
+  /// When true, confirmed emails fail as if SMTP were down.
+  bool emailFails = false;
+
+  /// Emails "sent" by confirmed actions: {'to': ..., 'subject': ..., 'message': ...}.
+  final List<Map<String, String?>> sentEmails = [];
 
   int _nextChatId = 1;
   DateTime _chatClock = DateTime.utc(2026, 10, 6, 9);
@@ -147,7 +163,7 @@ class FakeBackend {
   ];
 
   static const supportedPermissions = [
-    'LOCATION', 'MICROPHONE', 'CAMERA', 'PHOTOS', 'NOTIFICATIONS', 'DOCUMENTS', //
+    'LOCATION', 'MICROPHONE', 'CAMERA', 'PHOTOS', 'NOTIFICATIONS', 'DOCUMENTS', 'CONTACTS', //
   ];
   static const supportedStatuses = ['UNKNOWN', 'GRANTED', 'DENIED', 'RESTRICTED', 'LIMITED'];
 
@@ -265,6 +281,8 @@ class FakeBackend {
     BackgroundLocationSource? backgroundLocationSource,
     PhotoLibrary? photoLibrary,
     DocumentPlatform? documentPlatform,
+    ContactsSource? contactsSource,
+    MessageHandoff? messageHandoff,
     VoiceInput? voiceInput,
     TextToSpeechService? textToSpeech,
     ProfilePhotoPlatform? profilePhotoPlatform,
@@ -279,6 +297,8 @@ class FakeBackend {
         backgroundLocationSource: backgroundLocationSource ?? FakeBackgroundLocationSource(),
         photoLibrary: photoLibrary ?? FakePhotoLibrary(),
         documentPlatform: documentPlatform ?? FakeDocumentPlatform(),
+        contactsSource: contactsSource ?? FakeContactsSource(),
+        messageHandoff: messageHandoff ?? FakeMessageHandoff(),
         voiceInput: voiceInput ?? FakeVoiceInput(),
         textToSpeech: textToSpeech ?? FakeTextToSpeech(),
         profilePhotoPlatform: profilePhotoPlatform ?? FakeProfilePhotoPlatform(),
@@ -642,6 +662,15 @@ class FakeBackend {
       final userMessage = {'id': 'm${_nextChatId++}', 'role': 'CHAT_USER', 'content': message, 'createdAt': _tick()};
       final assistant = {'id': 'm${_nextChatId++}', 'role': 'CHAT_ASSISTANT', 'content': reply.text, 'createdAt': _tick()};
       messages.addAll([userMessage, assistant]);
+      for (final action in reply.pendingActions) {
+        chatActionStore[action['id'] as String] = {
+          'status': 'PENDING',
+          'channel': 'EMAIL',
+          ...action,
+          'userId': userId,
+          'conversationId': conversation['id'],
+        };
+      }
       conversation['title'] ??= reply.title ?? message.split(' ').take(4).join(' ');
       conversation['updatedAt'] = assistant['createdAt'];
       return _json(200, {
@@ -674,17 +703,87 @@ class FakeBackend {
         return _json(200, {'success': true});
       }
     }
-    final action = RegExp(r'^/api/chat/actions/([^/]+)/(confirm|cancel)$').firstMatch(path);
+    final action = RegExp(r'^/api/chat/actions/([^/]+)/(recipient|confirm|cancel|handoff)$').firstMatch(path);
     if (action != null && req.method == 'POST') {
-      final verb = action.group(2)!;
-      chatActions.add('$verb ${action.group(1)}');
-      return _json(200, {
-        'action': {
-          'id': action.group(1),
-          'status': verb == 'confirm' ? 'SUCCEEDED' : 'CANCELLED',
-          'message': verb == 'confirm' ? 'Done! I sent it to Mansi.' : "Okay, I didn't send anything.",
-        },
-      });
+      return _handleAction(action.group(1)!, action.group(2)!, req.body.isEmpty ? {} : jsonDecode(req.body), userId);
+    }
+    return _json(404, {'message': 'Not found'});
+  }
+
+  /// The action endpoints with the real server's rules: owner only, set the recipient once,
+  /// confirm and cancel once, WhatsApp is only ever "opened", never sent.
+  http.Response _handleAction(String id, String verb, Map<String, dynamic> body, String userId) {
+    final result = body['result'];
+    chatActions.add(result == null ? '$verb $id' : '$verb $id $result');
+    chatActionBodies.add(body);
+    final a = chatActionStore[id];
+    if (a == null || a['userId'] != userId) return _json(404, {'message': 'Action not found'});
+    if (body.containsKey('userId')) return _json(400, {'message': 'Validation failed'});
+    if (body['conversationId'] != null && body['conversationId'] != a['conversationId']) {
+      return _json(404, {'message': 'Action not found'});
+    }
+    final email = a['channel'] != 'WHATSAPP';
+    final name = (a['recipientName'] ?? a['contactQuery']) as String?;
+    http.Response view([String outcome = '', Map<String, dynamic>? handoff]) => _json(200, {
+      'action': {
+        for (final e in a.entries)
+          if (e.key != 'userId') e.key: e.value,
+        'outcomeMessage': outcome,
+        'handoff': ?handoff,
+      },
+    });
+    const handled = {'message': 'This action has already been handled', 'code': 'ACTION_ALREADY_HANDLED'};
+
+    switch (verb) {
+      case 'recipient':
+        if (a['status'] != 'PENDING') return _json(409, handled);
+        if (a['recipientAddress'] != null) return _json(409, {'message': 'The recipient has already been chosen.'});
+        final address = (body['address'] as String? ?? '').trim();
+        final valid = email
+            ? RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(address)
+            : address.replaceAll(RegExp(r'\D'), '').length >= 7;
+        if (!valid) {
+          return _json(400, {'message': email ? "That email address doesn't look right." : "That phone number doesn't look right."});
+        }
+        a['recipientAddress'] = address;
+        a['recipientName'] = body['name'] ?? name;
+        final who = a['recipientName'] == null ? address : email ? '${a['recipientName']} <$address>' : '${a['recipientName']} ($address)';
+        final via = email ? 'by email' : 'on WhatsApp';
+        a['summary'] = switch (a['type']) {
+          'SHARE_LOCATION' => 'Share your location with $who $via?',
+          'SHARE_TRAVEL_HISTORY' => 'Share your travel history with $who $via?',
+          _ => email ? 'Send an email to $who?' : 'Send this WhatsApp message to $who?',
+        };
+        return view();
+      case 'confirm':
+        if (a['status'] != 'PENDING') return _json(409, handled);
+        if (a['recipientAddress'] == null) return _json(409, {'message': 'Choose who to send it to first.'});
+        if (email) {
+          if (emailFails) {
+            a['status'] = 'FAILED';
+            return view("Sorry, I couldn't send the email to $name. Nothing was delivered.");
+          }
+          sentEmails.add({'to': a['recipientAddress'] as String?, 'subject': a['subject'] as String?, 'message': a['message'] as String?});
+          a['status'] = 'COMPLETED';
+          return view('Email sent to ${a['recipientName'] ?? name}.');
+        }
+        a['status'] = 'CONFIRMED';
+        return view('Opening WhatsApp...', {
+          'phone': a['recipientAddress'],
+          'message': a['message'] ?? '',
+          'documentQuery': a['documentQuery'],
+        });
+      case 'cancel':
+        if (a['status'] != 'PENDING' && a['status'] != 'CONFIRMED') return _json(409, handled);
+        a['status'] = 'CANCELLED';
+        return view("Okay, I didn't send anything.");
+      case 'handoff':
+        if (a['status'] != 'CONFIRMED' || email) return _json(409, handled);
+        if (result == 'unavailable') return view("WhatsApp isn't available on this device.");
+        a['status'] = 'COMPLETED';
+        return view(result == 'whatsapp_opened'
+            ? 'WhatsApp opened for ${a['recipientName']} with your message. Tap Send in WhatsApp to deliver it.'
+            : 'Share options opened for ${a['recipientName']}. Nothing is sent until you send it from the app you choose.');
     }
     return _json(404, {'message': 'Not found'});
   }
@@ -1143,6 +1242,58 @@ class FakeDocumentPlatform implements DocumentPlatform {
 
   static DocumentInfo _info(FakeDocumentFile f) =>
       DocumentInfo(name: f.name, mimeType: f.mimeType, size: f.size, modifiedAt: f.modifiedAt);
+}
+
+/// Stands in for the phone's address book. Counts reads, so tests can check that nothing is
+/// read without the Contacts permission.
+class FakeContactsSource implements ContactsSource {
+  FakeContactsSource([List<ContactItem>? contacts]) : contacts = contacts ?? [];
+
+  final List<ContactItem> contacts;
+  int reads = 0;
+
+  /// When set, reading the contacts fails with this.
+  Object? error;
+
+  @override
+  Future<List<ContactItem>> readAll() async {
+    reads++;
+    if (error != null) throw error!;
+    return List.of(contacts);
+  }
+}
+
+/// Stands in for WhatsApp and the share sheet. Nothing is ever sent from the app itself.
+class FakeMessageHandoff implements MessageHandoff {
+  bool whatsAppInstalled = true;
+  bool canShare = true;
+
+  /// Every handoff, e.g. "whatsapp 9876543210: Hi" or "share: Hi".
+  final List<String> calls = [];
+
+  @override
+  Future<HandoffResult> openWhatsApp({required String phone, required String text}) async {
+    calls.add('whatsapp $phone: $text');
+    return whatsAppInstalled ? HandoffResult.opened : HandoffResult.unavailable;
+  }
+
+  @override
+  Future<HandoffResult> shareText(String text) async {
+    calls.add('share: $text');
+    return canShare ? HandoffResult.opened : HandoffResult.unavailable;
+  }
+
+  @override
+  Future<HandoffResult> shareDocument({
+    required String reference,
+    required String mimeType,
+    String? text,
+    String? phone,
+    bool toWhatsApp = false,
+  }) async {
+    calls.add('${toWhatsApp ? 'whatsapp-document $phone' : 'share-document'}: $reference');
+    return (toWhatsApp ? whatsAppInstalled : canShare) ? HandoffResult.opened : HandoffResult.unavailable;
+  }
 }
 
 /// A scripted reply from the fake Child Assist.

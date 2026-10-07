@@ -9,7 +9,11 @@ enum AppPermission {
   microphone('Microphone'),
   camera('Camera'),
   photos('Photos'),
-  notifications('Notifications');
+  notifications('Notifications'),
+
+  /// Read-only access to the phone's contacts, searched on the device when the user asks chat
+  /// for someone's number or email. The address book is never uploaded.
+  contacts('Contacts');
 
   const AppPermission(this.label);
 
@@ -66,12 +70,14 @@ class PermissionService {
   Future<PermissionState> requestCameraPermission() => request(AppPermission.camera);
   Future<PermissionState> requestPhotoPermission() => request(AppPermission.photos);
   Future<PermissionState> requestNotificationPermission() => request(AppPermission.notifications);
+  Future<PermissionState> requestContactsPermission() => request(AppPermission.contacts);
 
   Future<PermissionState> locationStatus() => status(AppPermission.location);
   Future<PermissionState> microphoneStatus() => status(AppPermission.microphone);
   Future<PermissionState> cameraStatus() => status(AppPermission.camera);
   Future<PermissionState> photoStatus() => status(AppPermission.photos);
   Future<PermissionState> notificationStatus() => status(AppPermission.notifications);
+  Future<PermissionState> contactsStatus() => status(AppPermission.contacts);
 
   /// "Allow all the time" location, needed only for Automatic Location History. Separate from
   /// [AppPermission.location] (foreground, "while using the app"), which every other location
@@ -164,13 +170,14 @@ class PermissionService {
   /// Maps an app permission to the plugin permission for this platform, or null if unsupported.
   Future<ph.Permission?> _nativePermission(AppPermission permission) async {
     if (_isWeb) {
-      // The browser exposes these through the Permissions API; there is no photos permission.
+      // The browser exposes these through the Permissions API; there is no photos or contacts
+      // permission.
       return switch (permission) {
         AppPermission.location => ph.Permission.location,
         AppPermission.microphone => ph.Permission.microphone,
         AppPermission.camera => ph.Permission.camera,
         AppPermission.notifications => ph.Permission.notification,
-        AppPermission.photos => null,
+        AppPermission.photos || AppPermission.contacts => null,
       };
     }
     if (!_isMobile) return null;
@@ -182,6 +189,7 @@ class PermissionService {
       AppPermission.camera => ph.Permission.camera,
       AppPermission.notifications => ph.Permission.notification,
       AppPermission.photos => await _photosPermission(),
+      AppPermission.contacts => ph.Permission.contacts,
     };
   }
 

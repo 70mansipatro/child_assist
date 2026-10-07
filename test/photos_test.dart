@@ -423,6 +423,7 @@ void main() {
       'Microphone Access',
       'Photos Access',
       'Notifications',
+      'Contacts Access',
     ]) {
       expect(find.text(title), findsOneWidget);
       await tester.tap(find.widgetWithText(FilledButton, 'Continue'));

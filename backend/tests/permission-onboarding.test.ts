@@ -156,7 +156,7 @@ describe("permission onboarding", () => {
     const byType = Object.fromEntries(
       list.json.permissions.map((p: { permission: string; status: string }) => [p.permission, p.status]),
     );
-    assert.deepEqual(byType, { ...statuses, DOCUMENTS: "UNKNOWN" });
+    assert.deepEqual(byType, { ...statuses, DOCUMENTS: "UNKNOWN", CONTACTS: "UNKNOWN" });
     assert.equal(await prisma.userPermission.count({ where: { userId: userA.id } }), 5);
   });
 

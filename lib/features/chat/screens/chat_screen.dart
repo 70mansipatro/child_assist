@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../../../core/permissions/permission_service.dart';
 import '../../../core/navigation/app_menu.dart';
 import '../../../core/widgets/widgets.dart';
+import '../../contacts/services/contact_service.dart';
+import '../../contacts/services/message_handoff.dart';
 import '../../documents/screens/document_viewer_screen.dart';
 import '../../documents/screens/documents_screen.dart';
 import '../../documents/services/document_service.dart';
@@ -23,7 +25,8 @@ import '../widgets/typing_indicator.dart';
 import 'chat_history_screen.dart';
 
 /// Chat with Child Assist. All AI work happens on the server; this screen only sends text,
-/// shows replies, and runs photo/document searches locally when the server asks it to.
+/// shows replies, and runs photo, document and contact searches locally when the server asks it
+/// to (their results never leave the phone).
 /// Spoken messages are turned into text on the device and sent exactly like typed ones.
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -33,7 +36,9 @@ class ChatScreen extends StatefulWidget {
     required this.galleryService,
     required this.permissionService,
     required this.permissionSyncService,
+    required this.contactService,
     required this.textToSpeech,
+    this.messageHandoff = const NativeMessageHandoff(),
     this.voiceInput = const UnavailableVoiceInput(),
     this.active = true,
   });
@@ -43,6 +48,12 @@ class ChatScreen extends StatefulWidget {
   final PhotoGalleryService galleryService;
   final PermissionService permissionService;
   final PermissionSyncService permissionSyncService;
+
+  /// Finds contacts on this phone for "Mansi ka number do" and for message recipients.
+  final ContactService contactService;
+
+  /// Opens confirmed WhatsApp messages (or the share sheet); the user sends them there.
+  final MessageHandoff messageHandoff;
   final VoiceInput voiceInput;
   final TextToSpeechService textToSpeech;
 
@@ -61,23 +72,36 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
-  late final ChatSession _session = ChatSession(service: widget.chatService);
+  late final ChatSession _session = ChatSession(service: widget.chatService, handoff: widget.messageHandoff);
   final _input = TextEditingController();
   final _focus = FocusNode();
 
   late final ChatResultContext _results = ChatResultContext(
     documentService: widget.documentService,
     galleryService: widget.galleryService,
+    contactService: widget.contactService,
     onOpenPermissions: () => _push(
       PermissionsScreen(permissionService: widget.permissionService, syncService: widget.permissionSyncService),
     ),
+    onOpenSettings: _openPhoneSettings,
     onOpenDocuments: () => _push(DocumentsScreen(documentService: widget.documentService)),
     onOpenDocument: (document) =>
         _push(DocumentViewerScreen(document: document, documentService: widget.documentService)),
     onOpenPhoto: (photo) => _push(PhotoViewerScreen(photo: photo, galleryService: widget.galleryService)),
-    onConfirmAction: (id) => _session.confirmAction(id),
-    onCancelAction: (id) => _session.cancelAction(id),
+    onChooseRecipient: _session.chooseRecipient,
+    onConfirmAction: (id, document) => _session.confirmAction(id, document: document),
+    onCancelAction: _session.cancelAction,
+    onShareInstead: _session.shareInstead,
   );
+
+  Future<void> _openPhoneSettings() async {
+    final opened = await widget.permissionService.openSettings();
+    if (!opened && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Open your phone settings to allow Contacts for Child Assist.')),
+      );
+    }
+  }
 
   late final VoiceChatController _voice = VoiceChatController(
     voiceInput: widget.voiceInput,

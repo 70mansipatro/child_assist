@@ -38,6 +38,8 @@
 	<string>Child Assist uses your microphone only when you tap the voice button, so it can understand what you say.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Child Assist turns what you say into text only after you tap the voice button.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Child Assist searches your contacts on this phone only when you ask for someone's number or email, or to message them. Your contacts are never uploaded.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Child Assist accesses your photos only when you choose a feature that uses them.</string>
 	<key>UILaunchStoryboardName</key>

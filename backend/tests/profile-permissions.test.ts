@@ -135,7 +135,7 @@ describe("permissions", () => {
     const res = await call("GET", "/api/permissions", { token: userB.token });
     assert.equal(res.status, 200);
     const types = res.json.permissions.map((p: { permission: string }) => p.permission);
-    assert.deepEqual(types, ["LOCATION", "MICROPHONE", "CAMERA", "PHOTOS", "NOTIFICATIONS", "DOCUMENTS"]);
+    assert.deepEqual(types, ["LOCATION", "MICROPHONE", "CAMERA", "PHOTOS", "NOTIFICATIONS", "DOCUMENTS", "CONTACTS"]);
     for (const p of res.json.permissions) assert.equal(p.status, "UNKNOWN");
   });
 
@@ -184,7 +184,7 @@ describe("permissions", () => {
   });
 
   test("I. Unknown permission names are rejected with 400", async () => {
-    for (const name of ["BLUETOOTH", "location", "CONTACTS"]) {
+    for (const name of ["BLUETOOTH", "location", "contacts", "SMS"]) {
       const res = await call("PATCH", `/api/permissions/${name}`, {
         token: userA.token,
         body: { status: "GRANTED" },

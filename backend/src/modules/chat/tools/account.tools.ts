@@ -27,7 +27,7 @@ export function accountTools(ctx: ToolContext) {
       kind: "permissions",
       description:
         "Get which device permissions the user has granted to the Child Assist app " +
-        "(LOCATION, PHOTOS, DOCUMENTS, CAMERA, MICROPHONE, NOTIFICATIONS). Use it to explain why " +
+        "(LOCATION, PHOTOS, DOCUMENTS, CAMERA, MICROPHONE, NOTIFICATIONS, CONTACTS). Use it to explain why " +
         "something cannot be accessed. Permissions are changed by the user in the app, never by you.",
       inputSchema: z.strictObject({}),
       execute: async (_input, { userId }) => {

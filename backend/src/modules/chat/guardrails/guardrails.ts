@@ -108,14 +108,19 @@ export async function checkWithModel(
   }
 }
 
-// "I've sent it to Mansi", "I emailed your teacher": nothing is ever sent during a chat turn, so
-// any such claim is false (sending only happens after the user confirms in the app).
-const SEND_CLAIM = /\bI(?:'ve| have| just| already)?\s+(?:sent|emailed|e-mailed|forwarded|texted|messaged|shared|delivered)\b[^.!?\n]{0,80}\bto\b/i;
+// "I've sent it to Mansi", "I emailed your teacher", "Mansi ko bhej diya": nothing is ever sent
+// during a chat turn, so any such claim is false (sending only happens after the user confirms in
+// the app, and a WhatsApp message is only ever sent by the user in WhatsApp).
+const SEND_CLAIMS: ReadonlyArray<RegExp> = [
+  /\bI(?:'ve| have| just| already)?\s+(?:sent|emailed|e-mailed|forwarded|texted|messaged|shared|delivered|whatsapp(?:p?ed)?)\b[^.!?\n]{0,80}\bto\b/i,
+  /\b(?:email|e-mail|mail|message|whatsapp(?: message)?|location|details)\s+(?:has been|was|is)\s+(?:sent|delivered|shared)\b/i,
+  /\b(?:bhej|send kar|mail kar|share kar|whatsapp kar)\s*(?:diya|di|diye|dia|chuka|chuki|chuke)\b/i,
+];
 
 /** Final checks on the assistant's reply before it is saved and returned. */
 export function guardReply(reply: string, hasPendingAction: boolean): string {
   let text = redactSecrets(reply).trim();
-  if (SEND_CLAIM.test(text)) {
+  if (SEND_CLAIMS.some((claim) => claim.test(text))) {
     text = hasPendingAction
       ? "I've prepared that for you, but nothing has been sent yet. Please check the details and tap confirm in the app if you want me to send it."
       : "I haven't sent anything. Sending messages needs your confirmation in the app, and I couldn't prepare it this time.";

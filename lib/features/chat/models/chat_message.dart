@@ -134,6 +134,7 @@ enum ChatPermission {
   location('Location'),
   photos('Photos'),
   documents('Documents'),
+  contacts('Contacts'),
   other('Required');
 
   const ChatPermission(this.label);
@@ -145,6 +146,7 @@ enum ChatPermission {
         'LOCATION' => location,
         'PHOTOS' => photos,
         'DOCUMENTS' => documents,
+        'CONTACTS' => contacts,
         _ => other,
       };
 }
@@ -251,9 +253,23 @@ class ChatPlace {
   }
 }
 
-/// What to look for on the phone when the server hands a photo or document search to the app.
+/// Which contact detail the user asked for.
+enum ContactField {
+  phone,
+  email,
+  any;
+
+  static ContactField parse(Object? value) => switch (value) {
+        'phone' => phone,
+        'email' => email,
+        _ => any,
+      };
+}
+
+/// What to look for on the phone when the server hands a photo, document or contact search to
+/// the app. Nothing found on the phone is sent back to the server.
 class ChatLookupQuery {
-  const ChatLookupQuery({this.text, this.type, this.start, this.end, this.limit});
+  const ChatLookupQuery({this.text, this.type, this.start, this.end, this.limit, this.name, this.field = ContactField.any});
 
   /// Words the file name should contain.
   final String? text;
@@ -264,47 +280,185 @@ class ChatLookupQuery {
   final DateTime? end;
   final int? limit;
 
+  /// For a contact search: the name the user said, e.g. "Mansi".
+  final String? name;
+
+  /// For a contact search: the number, the email, or either.
+  final ContactField field;
+
   factory ChatLookupQuery.fromJson(Map<String, dynamic> json) => ChatLookupQuery(
         text: json['text'] is String && (json['text'] as String).trim().isNotEmpty ? json['text'] as String : null,
         type: json['type'] is String ? json['type'] as String : null,
         start: DateTime.tryParse(json['startDate'] as String? ?? ''),
         end: DateTime.tryParse(json['endDate'] as String? ?? ''),
         limit: (json['limit'] as num?)?.toInt(),
+        name: json['name'] is String && (json['name'] as String).trim().isNotEmpty ? (json['name'] as String).trim() : null,
+        field: ContactField.parse(json['field']),
       );
 }
 
-enum PendingActionState { awaiting, confirming, cancelling, done, cancelled, failed }
+/// Where an action is on this device. Nothing leaves the app before the user confirms it.
+enum PendingActionState {
+  /// Waiting for the user (and, for a contact given by name, for them to pick the contact).
+  awaiting,
+  confirming,
+  cancelling,
 
-/// An action with an outside effect (e.g. sending location details) that only runs after the
-/// user taps Confirm. The summary is written by the server, not by the AI.
+  /// Confirmed: WhatsApp (or the share sheet) is being opened.
+  handingOff,
+
+  /// Confirmed, but WhatsApp isn't on this phone: the user can still use the share sheet.
+  whatsAppUnavailable,
+  done,
+  cancelled,
+  failed,
+}
+
+/// How a confirmed action reaches the recipient.
+enum ActionChannel {
+  /// Sent by the Child Assist server with its own email account.
+  email,
+
+  /// Opened in WhatsApp on this phone; the user sends it there.
+  whatsApp,
+}
+
+/// What the phone opens after a WhatsApp action was confirmed.
+class ActionHandoff {
+  const ActionHandoff({required this.phone, required this.message, this.documentQuery});
+
+  final String phone;
+  final String message;
+  final String? documentQuery;
+
+  static ActionHandoff? tryParse(Object? json) {
+    if (json is! Map<String, dynamic>) return null;
+    final phone = json['phone'], message = json['message'];
+    if (phone is! String || message is! String) return null;
+    return ActionHandoff(phone: phone, message: message, documentQuery: json['documentQuery'] as String?);
+  }
+}
+
+/// An action with an outside effect (an email, a WhatsApp message) that only runs after the user
+/// taps Confirm. Everything shown (recipient, subject, message, data summary) comes from the
+/// server, which stored exactly that, so what the user confirms is what is sent.
 class PendingAction {
   const PendingAction({
     required this.id,
     required this.summary,
+    this.channel = ActionChannel.email,
+    this.type,
+    this.contactQuery,
+    this.recipientName,
+    this.recipientAddress,
+    this.subject,
+    this.message,
+    this.dataSummary,
+    this.documentQuery,
+    this.expiresAt,
     this.state = PendingActionState.awaiting,
     this.resultMessage,
+    this.handoff,
   });
 
   final String id;
+
+  /// The confirmation question, e.g. "Send this WhatsApp message to Rahul?".
   final String summary;
+  final ActionChannel channel;
+
+  /// The server's action type, e.g. SEND_EMAIL or SHARE_LOCATION.
+  final String? type;
+
+  /// The contact name to find on this phone while [recipientAddress] is not chosen yet.
+  final String? contactQuery;
+  final String? recipientName;
+
+  /// An email address or phone number; null until the user picks the contact.
+  final String? recipientAddress;
+  final String? subject;
+  final String? message;
+
+  /// What sensitive data is included, e.g. "Today's location (3 saved locations)".
+  final String? dataSummary;
+
+  /// For a document share: words from the document's name, matched on this phone.
+  final String? documentQuery;
+  final DateTime? expiresAt;
   final PendingActionState state;
 
   /// What happened after Confirm/Cancel, shown on the card.
   final String? resultMessage;
 
-  bool get isOpen => state == PendingActionState.awaiting;
+  /// After a WhatsApp action is confirmed: what to open.
+  final ActionHandoff? handoff;
 
-  PendingAction copyWith({PendingActionState? state, String? resultMessage}) => PendingAction(
-        id: id,
-        summary: summary,
-        state: state ?? this.state,
-        resultMessage: resultMessage ?? this.resultMessage,
-      );
+  bool get isOpen => state == PendingActionState.awaiting;
+  bool get isWhatsApp => channel == ActionChannel.whatsApp;
+  bool get isDocumentShare => type == 'SHARE_DOCUMENT';
+
+  /// The contact still has to be found on the phone and picked by the user.
+  bool get needsRecipient => recipientAddress == null;
+
+  /// Which contact detail the recipient needs.
+  ContactField get recipientField => isWhatsApp ? ContactField.phone : ContactField.email;
+
+  PendingAction copyWith({PendingActionState? state, String? resultMessage, ActionHandoff? handoff}) => PendingAction(
+    id: id,
+    summary: summary,
+    channel: channel,
+    type: type,
+    contactQuery: contactQuery,
+    recipientName: recipientName,
+    recipientAddress: recipientAddress,
+    subject: subject,
+    message: message,
+    dataSummary: dataSummary,
+    documentQuery: documentQuery,
+    expiresAt: expiresAt,
+    state: state ?? this.state,
+    resultMessage: resultMessage ?? this.resultMessage,
+    handoff: handoff ?? this.handoff,
+  );
+
+  /// The server's latest view of this action (e.g. after the recipient was chosen), keeping
+  /// what only this device knows.
+  PendingAction updatedFrom(PendingAction server) => PendingAction(
+    id: id,
+    summary: server.summary,
+    channel: server.channel,
+    type: server.type,
+    contactQuery: server.contactQuery,
+    recipientName: server.recipientName,
+    recipientAddress: server.recipientAddress,
+    subject: server.subject,
+    message: server.message,
+    dataSummary: server.dataSummary,
+    documentQuery: server.documentQuery,
+    expiresAt: server.expiresAt,
+    state: state,
+    resultMessage: resultMessage,
+    handoff: handoff,
+  );
 
   static PendingAction? tryParse(Map<String, dynamic> json) {
     final id = json['id'], summary = json['summary'];
     if (id is! String || summary is! String) return null;
-    return PendingAction(id: id, summary: summary);
+    String? text(String key) => json[key] is String && (json[key] as String).isNotEmpty ? json[key] as String : null;
+    return PendingAction(
+      id: id,
+      summary: summary,
+      channel: json['channel'] == 'WHATSAPP' ? ActionChannel.whatsApp : ActionChannel.email,
+      type: text('type'),
+      contactQuery: text('contactQuery'),
+      recipientName: text('recipientName'),
+      recipientAddress: text('recipientAddress'),
+      subject: text('subject'),
+      message: text('message'),
+      dataSummary: text('dataSummary'),
+      documentQuery: text('documentQuery'),
+      expiresAt: DateTime.tryParse(json['expiresAt'] as String? ?? ''),
+    );
   }
 }
 

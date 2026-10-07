@@ -651,6 +651,7 @@ void main() {
         AppPermission.microphone,
         AppPermission.photos,
         AppPermission.notifications,
+        AppPermission.contacts,
       ]);
     });
 

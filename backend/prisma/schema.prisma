@@ -36,6 +36,7 @@ model User {
   locations         LocationHistory[]
   chatConversations ChatConversation[]
   chatToolCalls     ChatToolCall[]
+  chatActions       ChatAction[]
 
   emailVerificationCodes EmailVerificationCode[]
   passwordResetCodes     PasswordResetCode[]
@@ -93,6 +94,8 @@ enum PermissionType {
   PHOTOS
   NOTIFICATIONS
   DOCUMENTS
+  // Phone contacts. Searched only on the device; the address book never reaches the server.
+  CONTACTS
 }
 
 enum PermissionStatus {
@@ -185,6 +188,7 @@ model ChatConversation {
   user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   messages  ChatMessage[]
   toolCalls ChatToolCall[]
+  actions   ChatAction[]
 
   @@index([userId])
   @@index([updatedAt])
@@ -224,4 +228,67 @@ model ChatToolCall {
   @@index([userId])
   @@index([createdAt])
   @@map("chat_tool_calls")
+}
+
+// Side-effect actions the assistant prepared (an email, a WhatsApp message) that only run after the
+// user explicitly confirms them in the app. The id is shared with the ChatToolCall audit row.
+// Recipient and content are kept only for the short confirmation lifecycle: they are cleared as
+// soon as the action reaches a final status. The phone's address book is never stored: only the
+// one address the user picked for this action.
+
+enum ChatActionStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+  FAILED
+  EXPIRED
+}
+
+enum ChatActionType {
+  SEND_EMAIL
+  SEND_WHATSAPP
+  SHARE_LOCATION
+  SHARE_TRAVEL_HISTORY
+  SHARE_DOCUMENT
+}
+
+// How the action reaches the recipient. EMAIL is sent by the backend over SMTP; WHATSAPP is opened
+// on the phone with the message prefilled and the user sends it there.
+enum ChatActionChannel {
+  EMAIL
+  WHATSAPP
+}
+
+model ChatAction {
+  id               String            @id
+  userId           String            @map("user_id") @db.Uuid
+  conversationId   String            @map("conversation_id")
+  type             ChatActionType
+  channel          ChatActionChannel
+  status           ChatActionStatus  @default(PENDING)
+  // The contact name the user said ("Mansi"), resolved on the phone when no address was given.
+  contactQuery     String?           @map("contact_query") @db.VarChar(120)
+  recipientName    String?           @map("recipient_name") @db.VarChar(120)
+  // An email address (EMAIL) or phone number (WHATSAPP). Null until the app resolves the contact.
+  recipientAddress String?           @map("recipient_address") @db.VarChar(320)
+  subject          String?           @db.VarChar(200)
+  message          String?           @db.Text
+  // What sensitive data is included, e.g. "Today's travel history (3 saved locations)".
+  dataSummary      String?           @map("data_summary") @db.VarChar(300)
+  // For SHARE_DOCUMENT: the document name the user mentioned, matched on the phone.
+  documentQuery    String?           @map("document_query") @db.VarChar(120)
+  expiresAt        DateTime          @map("expires_at")
+  confirmedAt      DateTime?         @map("confirmed_at")
+  completedAt      DateTime?         @map("completed_at")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([conversationId, createdAt])
+  @@index([expiresAt])
+  @@map("chat_actions")
 }

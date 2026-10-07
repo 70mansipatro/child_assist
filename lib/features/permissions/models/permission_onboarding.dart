@@ -53,4 +53,13 @@ const List<PermissionOnboardingStep> permissionOnboardingSteps = [
     description: 'Allow Child Assist to send you useful notifications and reminders.',
     icon: Icons.notifications_none,
   ),
+  PermissionOnboardingStep(
+    permission: AppPermission.contacts,
+    title: 'Contacts Access',
+    description:
+        'Child Assist can find a phone number or email in your contacts when you ask, '
+        'for example "Mansi ka number do".\n\n'
+        'Contacts are searched only on this phone and are never uploaded.',
+    icon: Icons.contacts_outlined,
+  ),
 ];

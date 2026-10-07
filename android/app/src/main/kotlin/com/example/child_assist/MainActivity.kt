@@ -1,18 +1,24 @@
 package com.example.child_assist
 
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
+import android.telephony.PhoneNumberUtils
+import android.telephony.TelephonyManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 import java.io.FileNotFoundException
+import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 
@@ -50,6 +56,36 @@ class MainActivity : FlutterActivity() {
                     "release" -> {
                         releaseGrant(uri)
                         result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
+        // Chat's confirmed WhatsApp messages: opens WhatsApp (or the share sheet) with the message
+        // prefilled. Nothing is ever sent from here: the user taps Send in the app that opens.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "child_assist/share")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "whatsAppInstalled" -> result.success(whatsAppPackage() != null)
+                    "openWhatsApp" -> result.success(
+                        openWhatsApp(call.argument<String>("phone") ?: "", call.argument<String>("text") ?: "")
+                    )
+                    "shareText" -> result.success(shareText(call.argument<String>("text") ?: ""))
+                    "shareDocument" -> {
+                        val uri = call.argument<String>("uri")?.let(Uri::parse)
+                        if (uri == null || uri.scheme != "content") {
+                            result.error("invalid_uri", "A content URI is required.", null)
+                        } else {
+                            result.success(
+                                shareDocument(
+                                    uri,
+                                    call.argument<String>("mimeType"),
+                                    call.argument<String>("text"),
+                                    call.argument<String>("phone"),
+                                    call.argument<Boolean>("whatsApp") == true,
+                                )
+                            )
+                        }
                     }
                     else -> result.notImplemented()
                 }
@@ -145,6 +181,96 @@ class MainActivity : FlutterActivity() {
             contentResolver.releasePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         } catch (e: SecurityException) {
             // No grant was held for it; nothing to release.
+        }
+    }
+
+    /** The installed WhatsApp (personal first, then Business), or null. */
+    private fun whatsAppPackage(): String? = listOf("com.whatsapp", "com.whatsapp.w4b").firstOrNull { pkg ->
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                packageManager.getPackageInfo(pkg, PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getPackageInfo(pkg, 0)
+            }
+            true
+        } catch (e: PackageManager.NameNotFoundException) {
+            false
+        }
+    }
+
+    /**
+     * The number in international form without "+", as WhatsApp expects. A number saved without a
+     * country code ("98765 43210") gets the SIM's (or the phone's region's) country code.
+     */
+    private fun whatsAppNumber(raw: String): String {
+        val telephony = getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+        val country = listOfNotNull(telephony?.simCountryIso, telephony?.networkCountryIso, Locale.getDefault().country)
+            .firstOrNull { it.isNotBlank() }
+            ?.uppercase(Locale.ROOT)
+        val e164 = country?.let { PhoneNumberUtils.formatNumberToE164(raw, it) }
+        return (e164 ?: raw).filter { it.isDigit() }
+    }
+
+    /** "opened" or "unavailable" (WhatsApp is not installed or could not be opened). */
+    private fun openWhatsApp(phone: String, text: String): String {
+        val pkg = whatsAppPackage() ?: return "unavailable"
+        val number = whatsAppNumber(phone)
+        if (number.length < 7) return "unavailable"
+        val intent = Intent(
+            Intent.ACTION_VIEW,
+            Uri.parse("https://api.whatsapp.com/send?phone=$number&text=${Uri.encode(text)}"),
+        ).apply { setPackage(pkg) }
+        return try {
+            startActivity(intent)
+            "opened"
+        } catch (e: ActivityNotFoundException) {
+            "unavailable"
+        }
+    }
+
+    /** Opens the system share sheet with [text]; the user picks the app and sends it there. */
+    private fun shareText(text: String): String {
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        return try {
+            startActivity(Intent.createChooser(send, "Share with"))
+            "opened"
+        } catch (e: ActivityNotFoundException) {
+            "unavailable"
+        }
+    }
+
+    /**
+     * Shares one document the user added (a content URI this app holds a grant for), either straight
+     * to the contact's WhatsApp chat or through the share sheet. The receiving app gets read access
+     * to this one file only.
+     */
+    private fun shareDocument(uri: Uri, mimeType: String?, text: String?, phone: String?, toWhatsApp: Boolean): String {
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = if (mimeType.isNullOrEmpty()) "*/*" else mimeType
+            putExtra(Intent.EXTRA_STREAM, uri)
+            clipData = ClipData.newRawUri(null, uri)
+            if (!text.isNullOrEmpty()) putExtra(Intent.EXTRA_TEXT, text)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        return try {
+            if (toWhatsApp) {
+                val pkg = whatsAppPackage() ?: return "unavailable"
+                send.setPackage(pkg)
+                // Opens the chat with this contact directly instead of WhatsApp's contact picker.
+                if (!phone.isNullOrEmpty()) send.putExtra("jid", "${whatsAppNumber(phone)}@s.whatsapp.net")
+                startActivity(send)
+            } else {
+                startActivity(Intent.createChooser(send, "Share with"))
+            }
+            "opened"
+        } catch (e: ActivityNotFoundException) {
+            "unavailable"
+        } catch (e: SecurityException) {
+            "unavailable"
         }
     }
 }

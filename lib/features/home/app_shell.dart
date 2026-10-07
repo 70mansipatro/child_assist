@@ -134,6 +134,8 @@ class _AppShellState extends State<AppShell> {
         galleryService: services.photoGalleryService,
         permissionService: services.permissionService,
         permissionSyncService: services.permissionSyncService,
+        contactService: services.contactService,
+        messageHandoff: services.messageHandoff,
         voiceInput: services.voiceInput,
         textToSpeech: services.textToSpeech,
       ),

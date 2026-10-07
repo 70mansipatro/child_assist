@@ -37,6 +37,7 @@ extension AppPermissionWire on AppPermission {
         AppPermission.camera => 'CAMERA',
         AppPermission.photos => 'PHOTOS',
         AppPermission.notifications => 'NOTIFICATIONS',
+        AppPermission.contacts => 'CONTACTS',
       };
 }
 

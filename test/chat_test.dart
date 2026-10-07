@@ -369,7 +369,7 @@ void main() {
     expect(photos.imageReads.every((r) => r.endsWith('300x300')), isTrue, reason: 'thumbnails only');
   });
 
-  testWidgets('14-16. confirmation card: Cancel sends nothing, Confirm runs the action', (tester) async {
+  testWidgets('14-16. confirmation card: shows exactly what is sent; Cancel sends nothing, Confirm runs it', (tester) async {
     await startApp(tester);
     await openChat(tester);
     var next = 1;
@@ -379,28 +379,47 @@ void main() {
             {'kind': 'send_action', 'status': 'confirmation_required'},
           ],
           pendingActions: [
-            {'id': 'act${next++}', 'toolName': 'share_location', 'summary': 'Send your location details to Mansi?'},
+            {
+              'id': 'act${next++}',
+              'toolName': 'prepare_email',
+              'type': 'SHARE_LOCATION',
+              'channel': 'EMAIL',
+              'summary': 'Share your location with Mansi <mansi@example.com> by email?',
+              'recipientName': 'Mansi',
+              'recipientAddress': 'mansi@example.com',
+              'subject': "Child Assist - Today's Location",
+              'message': "Today's location (shared from Child Assist):\n• 10:32 AM — Patia, Bhubaneswar",
+              'dataSummary': "Today's location (1 saved location)",
+            },
           ],
         );
 
-    await send(tester, 'Send my visited location details to Mansi.');
-    expect(find.text('Send your location details to Mansi?'), findsOneWidget);
+    await send(tester, 'Mansi ko meri aaj ki location email kar do');
+    expect(find.text('Share your location with Mansi <mansi@example.com> by email?'), findsOneWidget);
+    // Recipient, subject, the kind of data and the exact message are all shown before confirming.
+    expect(find.text('Mansi <mansi@example.com>'), findsOneWidget);
+    expect(find.text("Child Assist - Today's Location"), findsOneWidget);
+    expect(find.text("Today's location (1 saved location)"), findsOneWidget);
+    expect(find.textContaining('Patia, Bhubaneswar'), findsOneWidget);
     expect(find.text('Nothing is sent until you confirm.'), findsOneWidget);
     expect(find.widgetWithText(OutlinedButton, 'Cancel'), findsOneWidget);
-    expect(find.widgetWithText(FilledButton, 'Confirm'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Confirm & Send'), findsOneWidget);
     expect(backend.chatActions, isEmpty, reason: 'nothing runs automatically');
 
     await tester.tap(find.widgetWithText(OutlinedButton, 'Cancel'));
     await tester.pumpAndSettle();
     expect(backend.chatActions, ['cancel act1']);
     expect(find.text("Okay, I didn't send anything."), findsOneWidget);
-    expect(find.widgetWithText(FilledButton, 'Confirm'), findsNothing);
+    expect(find.widgetWithText(FilledButton, 'Confirm & Send'), findsNothing);
+    expect(backend.sentEmails, isEmpty);
 
-    await send(tester, 'Send my visited location details to Mansi.');
-    await tester.tap(find.widgetWithText(FilledButton, 'Confirm'));
+    await send(tester, 'Mansi ko meri aaj ki location email kar do');
+    await tester.tap(find.widgetWithText(FilledButton, 'Confirm & Send'));
     await tester.pumpAndSettle();
     expect(backend.chatActions, ['cancel act1', 'confirm act2']);
-    expect(find.text('Done! I sent it to Mansi.'), findsOneWidget);
+    expect(backend.chatActionBodies.last, {'conversationId': backend.chatRequests.last['conversationId']});
+    expect(find.text('Email sent to Mansi.'), findsOneWidget);
+    expect(backend.sentEmails, hasLength(1));
   });
 
   testWidgets('18. long, multi-line messages render and scroll without overflow', (tester) async {

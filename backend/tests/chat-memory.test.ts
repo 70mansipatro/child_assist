@@ -12,7 +12,6 @@ import { MockLanguageModelV4 } from "ai/test";
 import { LocationSource, PermissionStatus, PermissionType } from "../generated/prisma/client";
 import { createApp } from "../src/app";
 import { prisma } from "../src/lib/prisma";
-import { clearPendingActions } from "../src/modules/chat/actions/pending-actions";
 import { setChatModels } from "../src/modules/chat/ai/models";
 import { registerVerifiedUser } from "./support/auth";
 import { localInstant, localToday, shiftDays } from "./support/dates";
@@ -156,7 +155,6 @@ before(async () => {
 
 afterEach(() => {
   setChatModels(null);
-  clearPendingActions();
 });
 
 after(async () => {

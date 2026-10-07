@@ -123,11 +123,7 @@ class ChatMessageBubble extends StatelessWidget {
         ?toolResultCard(event, results),
       ],
       for (final action in message.pendingActions)
-        ConfirmationCard(
-          action: action,
-          onConfirm: () => results.onConfirmAction(action.id),
-          onCancel: () => results.onCancelAction(action.id),
-        ),
+        ActionConfirmationCard(key: ValueKey('confirm-${action.id}'), action: action, results: results),
     ];
 
     return Padding(

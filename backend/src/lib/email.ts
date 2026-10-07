@@ -7,6 +7,8 @@ export interface EmailMessage {
   subject: string;
   text: string;
   html: string;
+  /** Where the recipient's replies go, e.g. the Child Assist user who sent it. */
+  replyTo?: string;
 }
 
 export type EmailSender = (message: EmailMessage) => Promise<void>;
@@ -42,6 +44,11 @@ function transporterFor(config: SmtpConfig): Transporter {
     };
   }
   return cached.transporter;
+}
+
+/** Whether email can be sent at all: SMTP is configured (or a test sender is installed). */
+export function emailAvailable(): boolean {
+  return senderOverride !== null || !smtpConfig().error;
 }
 
 /**
@@ -104,8 +111,8 @@ export function verificationEmail(to: string, code: string, ttlMinutes: number):
   return { to, subject: "Verify your Child Assist account", text, html };
 }
 
-/** Shared frame for the account emails: a header bar and a white card. `body` must be safe HTML. */
-function emailLayout(body: string): string {
+/** Shared frame for the app's emails: a header bar and a white card. `body` must be safe HTML. */
+export function emailLayout(body: string): string {
   return `<!doctype html>
 <html>
   <body style="margin:0;padding:24px;background:#f4f3fb;font-family:Arial,Helvetica,sans-serif;color:#1f1b2e;">

@@ -52,6 +52,8 @@ post_install do |installer|
         # History (requested only after the user switches it on).
         'PERMISSION_LOCATION=1',
         'PERMISSION_NOTIFICATIONS=1',
+        # Contacts: read on the phone only when the user asks for a contact in chat.
+        'PERMISSION_CONTACTS=1',
       ]
     end
   end

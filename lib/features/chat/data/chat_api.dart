@@ -90,32 +90,66 @@ class ChatApi {
     await _client.delete('/api/chat/conversations/${Uri.encodeComponent(id)}', token: token);
   }
 
-  /// Runs an action the user explicitly confirmed. Returns the server's outcome message.
-  Future<ActionOutcome> confirmAction(String token, String id) =>
-      _action(token, id, 'confirm');
+  /// Tells the server which contact the user picked on this phone for an action: only that one
+  /// email address or phone number, never anything else from the address book.
+  Future<PendingAction> chooseRecipient(
+    String token,
+    String id, {
+    required String address,
+    String? name,
+    String? conversationId,
+  }) async {
+    final json = await _client.post(
+      '/api/chat/actions/${Uri.encodeComponent(id)}/recipient',
+      token: token,
+      body: {'address': address, 'name': ?name, 'conversationId': ?conversationId},
+    );
+    final action = PendingAction.tryParse(json['action'] as Map<String, dynamic>? ?? const {});
+    if (action == null) throw ApiException('Something went wrong. Please try again.');
+    return action;
+  }
+
+  /// Runs an action the user explicitly confirmed. Returns the server's outcome.
+  Future<ActionOutcome> confirmAction(String token, String id, {String? conversationId}) =>
+      _action(token, id, 'confirm', {'conversationId': ?conversationId});
 
   /// Declines an action so it can never run.
-  Future<ActionOutcome> cancelAction(String token, String id) => _action(token, id, 'cancel');
+  Future<ActionOutcome> cancelAction(String token, String id, {String? conversationId}) =>
+      _action(token, id, 'cancel', {'conversationId': ?conversationId});
 
-  Future<ActionOutcome> _action(String token, String id, String verb) async {
+  /// Reports what happened after a confirmed WhatsApp action: WhatsApp or the share sheet was
+  /// opened (the user sends it there), or WhatsApp isn't on this phone.
+  Future<ActionOutcome> reportHandoff(String token, String id, String result, {String? conversationId}) =>
+      _action(token, id, 'handoff', {'result': result, 'conversationId': ?conversationId});
+
+  Future<ActionOutcome> _action(String token, String id, String verb, Map<String, Object?> body) async {
     final json = await _client.post(
       '/api/chat/actions/${Uri.encodeComponent(id)}/$verb',
       token: token,
       timeout: replyTimeout,
+      body: body,
     );
     final action = json['action'] as Map<String, dynamic>? ?? const {};
     return ActionOutcome(
-      succeeded: action['status'] == 'SUCCEEDED',
-      cancelled: action['status'] == 'CANCELLED',
-      message: action['message'] as String? ?? '',
+      status: action['status'] as String? ?? '',
+      message: action['outcomeMessage'] as String? ?? '',
+      handoff: ActionHandoff.tryParse(action['handoff']),
     );
   }
 }
 
+/// The server's answer to Confirm, Cancel or a WhatsApp handoff report.
 class ActionOutcome {
-  const ActionOutcome({required this.succeeded, required this.cancelled, required this.message});
+  const ActionOutcome({required this.status, required this.message, this.handoff});
 
-  final bool succeeded;
-  final bool cancelled;
+  /// PENDING, CONFIRMED, CANCELLED, COMPLETED, FAILED or EXPIRED.
+  final String status;
   final String message;
+
+  /// For a confirmed WhatsApp action: what this phone should open.
+  final ActionHandoff? handoff;
+
+  bool get completed => status == 'COMPLETED';
+  bool get cancelled => status == 'CANCELLED';
+  bool get confirmed => status == 'CONFIRMED';
 }

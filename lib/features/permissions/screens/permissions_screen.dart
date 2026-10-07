@@ -410,6 +410,7 @@ class _PermissionsScreenState extends State<PermissionsScreen> {
         AppPermission.camera => AppGradients.profile,
         AppPermission.photos => AppGradients.photos,
         AppPermission.notifications => AppGradients.notifications,
+        AppPermission.contacts => AppGradients.documents,
       };
 
   static IconData _icon(AppPermission permission) => switch (permission) {
@@ -418,6 +419,7 @@ class _PermissionsScreenState extends State<PermissionsScreen> {
         AppPermission.camera => Icons.photo_camera_rounded,
         AppPermission.photos => Icons.photo_library_rounded,
         AppPermission.notifications => Icons.notifications_rounded,
+        AppPermission.contacts => Icons.contacts_rounded,
       };
   static String _statusLabel(PermissionState state) => switch (state) {
         PermissionState.granted => 'Allowed',

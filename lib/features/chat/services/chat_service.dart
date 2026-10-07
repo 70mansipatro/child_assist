@@ -60,11 +60,11 @@ class ChatService {
   }
 
   /// The server decides what Child Assist may read from the permission statuses the app
-  /// reported. Re-reports Location and Photos as the OS sees them now (a status check, never a
-  /// dialog), so turning a permission off in Settings takes effect in chat right away.
+  /// reported. Re-reports Location, Photos and Contacts as the OS sees them now (a status check,
+  /// never a dialog), so turning a permission off in Settings takes effect in chat right away.
   /// The microphone is deliberately not touched.
   Future<void> syncDevicePermissions() async {
-    for (final permission in const [AppPermission.location, AppPermission.photos]) {
+    for (final permission in const [AppPermission.location, AppPermission.photos, AppPermission.contacts]) {
       try {
         final state = await _permissions.status(permission);
         await _sync.report(permission, state, fromRequest: false);
@@ -86,7 +86,17 @@ class ChatService {
   Future<void> deleteConversation(String id) =>
       _auth.authorized((token) => _api.deleteConversation(token, id));
 
-  Future<ActionOutcome> confirmAction(String id) => _auth.authorized((token) => _api.confirmAction(token, id));
+  Future<PendingAction> chooseRecipient(String id, {required String address, String? name, String? conversationId}) =>
+      _auth.authorized(
+        (token) => _api.chooseRecipient(token, id, address: address, name: name, conversationId: conversationId),
+      );
 
-  Future<ActionOutcome> cancelAction(String id) => _auth.authorized((token) => _api.cancelAction(token, id));
+  Future<ActionOutcome> confirmAction(String id, {String? conversationId}) =>
+      _auth.authorized((token) => _api.confirmAction(token, id, conversationId: conversationId));
+
+  Future<ActionOutcome> cancelAction(String id, {String? conversationId}) =>
+      _auth.authorized((token) => _api.cancelAction(token, id, conversationId: conversationId));
+
+  Future<ActionOutcome> reportHandoff(String id, String result, {String? conversationId}) =>
+      _auth.authorized((token) => _api.reportHandoff(token, id, result, conversationId: conversationId));
 }

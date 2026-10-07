@@ -11,6 +11,9 @@ import 'features/chat/data/chat_api.dart';
 import 'features/chat/services/chat_service.dart';
 import 'features/chat/services/text_to_speech_service.dart';
 import 'features/chat/services/voice_input.dart';
+import 'features/contacts/services/contact_permission_service.dart';
+import 'features/contacts/services/contact_service.dart';
+import 'features/contacts/services/message_handoff.dart';
 import 'features/documents/services/document_service.dart';
 import 'features/location/data/location_api.dart';
 import 'features/location/data/tracking_store.dart';
@@ -41,13 +44,16 @@ class AppServices {
     required this.photoGalleryService,
     required this.documentService,
     required this.chatService,
+    required this.contactService,
+    required this.messageHandoff,
     required this.voiceInput,
     required this.textToSpeech,
   });
 
   /// Wires the real implementations. Tests can swap the HTTP client, storage, Google sign-in, the
   /// OS permission layer, the location hardware (foreground and background), the geocoder, the
-  /// photo library, the device documents, speech recognition or text-to-speech.
+  /// photo library, the device documents, the phone's contacts, WhatsApp/sharing, speech
+  /// recognition or text-to-speech.
   factory AppServices.create({
     ApiClient? apiClient,
     TokenStorage? tokenStorage,
@@ -59,6 +65,8 @@ class AppServices {
     TrackingStore? trackingStore,
     PhotoLibrary? photoLibrary,
     DocumentPlatform? documentPlatform,
+    ContactsSource? contactsSource,
+    MessageHandoff? messageHandoff,
     VoiceInput? voiceInput,
     TextToSpeechService? textToSpeech,
     ProfilePhotoPlatform? profilePhotoPlatform,
@@ -107,6 +115,11 @@ class AppServices {
         permissionService: permissions,
         permissionSyncService: permissionSyncService,
       ),
+      contactService: ContactService(
+        permission: ContactPermissionService(permissionService: permissions, syncService: permissionSyncService),
+        source: contactsSource,
+      ),
+      messageHandoff: messageHandoff ?? const NativeMessageHandoff(),
       voiceInput: voiceInput ?? SpeechToTextVoiceInput(),
       textToSpeech: textToSpeech ?? FlutterTextToSpeechService(),
     );
@@ -128,6 +141,12 @@ class AppServices {
   final PhotoGalleryService photoGalleryService;
   final DocumentService documentService;
   final ChatService chatService;
+
+  /// Searches the phone's contacts on the device; the address book is never uploaded.
+  final ContactService contactService;
+
+  /// Opens confirmed WhatsApp messages or the share sheet; the user sends them there.
+  final MessageHandoff messageHandoff;
 
   /// Tap-to-talk speech input for chat.
   final VoiceInput voiceInput;

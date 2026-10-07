@@ -315,6 +315,7 @@ class _PermissionOnboardingScreenState extends State<PermissionOnboardingScreen>
         AppPermission.microphone => AppGradients.microphone,
         AppPermission.photos => AppGradients.photos,
         AppPermission.notifications => AppGradients.notifications,
+        AppPermission.contacts => AppGradients.documents,
       };
 
   List<Widget> _buildStatus(ThemeData theme) {

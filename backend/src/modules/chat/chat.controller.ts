@@ -1,9 +1,17 @@
 import type { Request, Response } from "express";
 import { getAuth } from "../../middleware/auth.middleware";
-import { cancelPendingAction, confirmPendingAction } from "./actions/pending-actions";
+import {
+  cancelPendingAction,
+  completeHandoff,
+  confirmPendingAction,
+  setActionRecipient,
+} from "./actions/pending-actions";
 import { handleChatTurn } from "./chat.orchestrator";
 import * as chatService from "./chat.service";
 import {
+  actionHandoffSchema,
+  actionRecipientSchema,
+  actionScopeSchema,
   chatRequestSchema,
   createConversationSchema,
   idParamsSchema,
@@ -52,14 +60,30 @@ export async function deleteConversation(req: Request, res: Response): Promise<v
   res.status(200).json({ success: true });
 }
 
+export async function chooseActionRecipient(req: Request, res: Response): Promise<void> {
+  const { id } = idParamsSchema.parse(req.params);
+  const { conversationId, name, address } = actionRecipientSchema.parse(req.body ?? {});
+  const action = await setActionRecipient(getAuth(req).userId, id, { name, address }, { conversationId });
+  res.status(200).json({ action });
+}
+
 export async function confirmAction(req: Request, res: Response): Promise<void> {
   const { id } = idParamsSchema.parse(req.params);
-  const action = await confirmPendingAction(getAuth(req).userId, id);
+  const scope = actionScopeSchema.parse(req.body ?? {});
+  const action = await confirmPendingAction(getAuth(req).userId, id, scope);
   res.status(200).json({ action });
 }
 
 export async function cancelAction(req: Request, res: Response): Promise<void> {
   const { id } = idParamsSchema.parse(req.params);
-  const action = await cancelPendingAction(getAuth(req).userId, id);
+  const scope = actionScopeSchema.parse(req.body ?? {});
+  const action = await cancelPendingAction(getAuth(req).userId, id, scope);
+  res.status(200).json({ action });
+}
+
+export async function actionHandoff(req: Request, res: Response): Promise<void> {
+  const { id } = idParamsSchema.parse(req.params);
+  const { conversationId, result } = actionHandoffSchema.parse(req.body ?? {});
+  const action = await completeHandoff(getAuth(req).userId, id, result, { conversationId });
   res.status(200).json({ action });
 }

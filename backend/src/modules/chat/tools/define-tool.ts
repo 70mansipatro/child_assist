@@ -93,10 +93,10 @@ function eventFor<INPUT>(spec: ChatToolSpec<INPUT>, result: ToolResult<unknown>)
       case "PERMISSION_REQUIRED":
         return "permission_required";
       case "WEB_SEARCH_NOT_CONFIGURED":
-      case "CONTACTS_NOT_CONFIGURED":
       case "ACTION_NOT_CONFIGURED":
         return "not_configured";
       case "INVALID_ARGUMENTS":
+      case "INVALID_RECIPIENT":
         return "invalid";
       case "TOOL_FAILED":
         return "failed";
