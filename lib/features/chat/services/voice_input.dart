@@ -62,6 +62,10 @@ enum VoiceErrorKind {
   permissionDenied,
   permissionBlocked,
   unavailable,
+
+  /// The recogniser was asked to listen but never opened the microphone (e.g. the phone's
+  /// speech service failed to start). Distinct from [noSpeech], where it listened to silence.
+  notStarted,
   noSpeech,
   busy,
   network,
@@ -71,7 +75,11 @@ enum VoiceErrorKind {
         permissionDenied => 'Microphone permission is needed for voice chat.',
         permissionBlocked =>
           'Microphone permission is needed for voice chat. You can turn it on in Permissions.',
-        unavailable => "Voice chat isn't available on this device. You can type your message instead.",
+        unavailable =>
+          "Speech recognition isn't available on this device. You can type your message instead.",
+        notStarted =>
+          "Voice input couldn't start. Check that your phone's speech recognition (Google) is "
+              'turned on, then try again.',
         noSpeech => "I didn't hear anything. Try again.",
         busy => 'The microphone is busy right now. Try again in a moment.',
         network => "I couldn't understand that because of a connection problem. Try again.",
@@ -128,6 +136,7 @@ class SpeechToTextVoiceInput implements VoiceInput {
     TargetPlatform? platform,
     this.listenFor = const Duration(seconds: 30),
     this.pauseFor = const Duration(seconds: 4),
+    this.lookUpRecognizer = false,
   })  : _speechOverride = speech,
         _isWeb = isWeb ?? kIsWeb,
         _platform = platform ?? defaultTargetPlatform;
@@ -146,10 +155,21 @@ class SpeechToTextVoiceInput implements VoiceInput {
   /// How long a silence ends the utterance.
   final Duration pauseFor;
 
+  /// Android: bind to the installed speech service by its component name instead of the
+  /// phone's "default" recogniser, for phones whose default one does not work.
+  final bool lookUpRecognizer;
+
   bool _initialized = false;
+  Future<bool>? _initializing;
   Completer<String?>? _pending;
   String _recognized = '';
   ValueChanged<String>? _onPartial;
+
+  // Evidence that this utterance really reached the microphone: the recogniser reported
+  // "listening" and then sound levels or words. Without it, a "no match" means the recogniser
+  // failed to start, not that the user was silent.
+  bool _started = false;
+  bool _heardAudio = false;
 
   @override
   bool get isAvailable =>
@@ -159,21 +179,32 @@ class SpeechToTextVoiceInput implements VoiceInput {
   bool get isListening => _pending != null;
 
   @override
-  Future<bool> initialize() async {
-    if (!isAvailable) return false;
-    if (_initialized) return true;
+  Future<bool> initialize() {
+    if (!isAvailable) return Future.value(false);
+    if (_initialized) return Future.value(true);
+    // Concurrent callers share one platform initialisation.
+    return _initializing ??= _initialize().whenComplete(() => _initializing = null);
+  }
+
+  Future<bool> _initialize() async {
     try {
       _initialized = await _speech.initialize(
         onError: _handleError,
         onStatus: _handleStatus,
+        // Native plugin logs (tag SpeechToTextPlugin) in debug builds only.
+        debugLogging: kDebugMode,
         // Bluetooth headsets would need an extra runtime permission; the phone's microphone
         // is enough for tap-to-talk.
-        options: [SpeechToText.androidNoBluetooth],
+        options: [
+          SpeechToText.androidNoBluetooth,
+          if (lookUpRecognizer) SpeechToText.androidIntentLookup,
+        ],
       );
     } catch (e) {
-      debugPrint('Speech initialisation failed: ${e.runtimeType}');
+      _log('speech initialize threw ${e.runtimeType}');
       _initialized = false;
     }
+    _log('speech initialized: $_initialized');
     return _initialized;
   }
 
@@ -185,21 +216,33 @@ class SpeechToTextVoiceInput implements VoiceInput {
     final pending = _pending = Completer<String?>();
     _recognized = '';
     _onPartial = onPartialResult;
+    _started = false;
+    _heardAudio = false;
     try {
       await _speech.listen(
         onResult: _handleResult,
+        onSoundLevelChange: _handleSoundLevel,
         listenOptions: SpeechListenOptions(
           listenFor: listenFor,
           pauseFor: pauseFor,
+          // Null: the device's own speech language.
           localeId: localeId,
           partialResults: true,
           cancelOnError: true,
           listenMode: ListenMode.confirmation,
         ),
       );
+      // The recogniser reports "listening" before listen returns; without it, it refused to
+      // start (e.g. a previous session was still open) and nothing would ever complete.
+      if (!_started && !pending.isCompleted && !_speech.isListening) {
+        _log('listen did not start');
+        _completeError(const VoiceInputException(VoiceErrorKind.notStarted));
+      } else {
+        _log('listening started');
+      }
     } catch (e) {
-      debugPrint('Speech listen failed: ${e.runtimeType}');
-      _completeError(const VoiceInputException(VoiceErrorKind.unknown));
+      _log('listen threw ${e.runtimeType}');
+      _completeError(const VoiceInputException(VoiceErrorKind.notStarted));
     }
     return pending.future;
   }
@@ -207,11 +250,12 @@ class SpeechToTextVoiceInput implements VoiceInput {
   @override
   Future<void> stopListening() async {
     if (_pending == null) return;
+    _log('stop requested');
     try {
       // The recogniser then sends its final result (or "done"), which completes [listen].
       await _speech.stop();
     } catch (e) {
-      debugPrint('Speech stop failed: ${e.runtimeType}');
+      _log('stop threw ${e.runtimeType}');
       _complete(_recognized);
     }
   }
@@ -219,11 +263,12 @@ class SpeechToTextVoiceInput implements VoiceInput {
   @override
   Future<void> cancelListening() async {
     if (_pending == null) return;
+    _log('cancelled');
     _complete(null);
     try {
       await _speech.cancel();
     } catch (e) {
-      debugPrint('Speech cancel failed: ${e.runtimeType}');
+      _log('cancel threw ${e.runtimeType}');
     }
   }
 
@@ -243,21 +288,37 @@ class SpeechToTextVoiceInput implements VoiceInput {
   void _handleResult(SpeechRecognitionResult result) {
     if (_pending == null) return;
     _recognized = result.recognizedWords;
+    if (_recognized.isNotEmpty) _heardAudio = true;
     if (result.finalResult) {
+      _log('final: ${_private(_recognized)}');
       _complete(_recognized);
     } else {
+      _log('partial: ${_private(_recognized)}');
       _onPartial?.call(_recognized);
     }
   }
 
+  void _handleSoundLevel(double level) {
+    if (_pending != null) _heardAudio = true;
+  }
+
   void _handleStatus(String status) {
+    _log('status: $status');
+    if (_pending == null) return;
+    if (status == SpeechToText.listeningStatus) _started = true;
     // "done" without a final result (e.g. stopped during silence): use what was heard.
     if (status == SpeechToText.doneStatus) _complete(_recognized);
   }
 
   void _handleError(SpeechRecognitionError error) {
+    _log('error: ${error.errorMsg}');
     if (_pending == null) return;
-    final kind = errorKindFor(error.errorMsg);
+    var kind = errorKindFor(error.errorMsg);
+    if (kind == VoiceErrorKind.noSpeech && !_heardAudio && _platform == TargetPlatform.android) {
+      // Android reports sound levels the whole time it records, even in silence. With none at
+      // all, the speech service never opened the microphone: that is not "no speech".
+      kind = VoiceErrorKind.notStarted;
+    }
     // Silence is not a failure: [listen] reports it as an empty transcript.
     if (kind == VoiceErrorKind.noSpeech) {
       _complete(_recognized);
@@ -290,6 +351,8 @@ class SpeechToTextVoiceInput implements VoiceInput {
       case 'error_language_unavailable':
       case 'error_speech_recognizer_disabled':
         return VoiceErrorKind.unavailable;
+      case 'error_client':
+        return VoiceErrorKind.notStarted;
       default:
         return VoiceErrorKind.unknown;
     }
@@ -313,3 +376,11 @@ class SpeechToTextVoiceInput implements VoiceInput {
     pending.completeError(error);
   }
 }
+
+/// Development-only voice logs: never tokens or personal data, and the recognised words only
+/// in debug builds.
+void _log(String message) {
+  if (kDebugMode) debugPrint('[Voice] $message');
+}
+
+String _private(String words) => kDebugMode ? '"$words"' : '(${words.length} chars)';

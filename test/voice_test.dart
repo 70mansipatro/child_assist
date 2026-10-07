@@ -26,6 +26,9 @@ import 'support/fakes.dart';
 /// statuses the way the Android/iOS recogniser would.
 class FakeSpeechPlatform extends SpeechToTextPlatform with MockPlatformInterfaceMixin {
   bool initResult = true;
+
+  /// False: the device recogniser refuses to start (e.g. a session is still open).
+  bool listenStarts = true;
   final List<String> calls = [];
   List<SpeechConfigOption>? initOptions;
   SpeechListenOptions? listenOptions;
@@ -51,6 +54,7 @@ class FakeSpeechPlatform extends SpeechToTextPlatform with MockPlatformInterface
   }) async {
     calls.add('listen');
     listenOptions = options;
+    if (!listenStarts) return false;
     onStatus?.call(SpeechToText.listeningStatus);
     return true;
   }
@@ -70,6 +74,9 @@ class FakeSpeechPlatform extends SpeechToTextPlatform with MockPlatformInterface
         ],
         'resultType': last ? 2 : 0,
       }));
+
+  /// The microphone is open: Android reports sound levels the whole time, even in silence.
+  void soundLevel([double level = -2]) => onSoundLevel!(level);
 
   void error(String code) => onError!(jsonEncode({'errorMsg': code, 'permanent': true}));
 
@@ -169,13 +176,76 @@ void main() {
     test('silence completes with an empty transcript instead of an error', () async {
       var result = voice.listen();
       await pumpEventQueue();
+      platform.soundLevel();
       platform.error('error_no_match');
+      expect(await result, '');
+
+      result = voice.listen();
+      await pumpEventQueue();
+      platform.soundLevel();
+      platform.error('error_speech_timeout');
       expect(await result, '');
 
       result = voice.listen();
       await pumpEventQueue();
       platform.status('doneNoResult');
       expect(await result, '');
+    });
+
+    test('"no match" before the microphone ever opened is not reported as silence', () async {
+      // The phone's speech service failed: no sound level, no words, then "no match".
+      final result = voice.listen();
+      await pumpEventQueue();
+      platform.error('error_speech_timeout');
+      await expectLater(
+        result,
+        throwsA(isA<VoiceInputException>().having((e) => e.kind, 'kind', VoiceErrorKind.notStarted)),
+      );
+      expect(voice.isListening, isFalse);
+      expect(VoiceErrorKind.notStarted.message, isNot(VoiceErrorKind.noSpeech.message));
+    });
+
+    test('a recogniser that refuses to start fails instead of hanging', () async {
+      platform.listenStarts = false;
+      await expectLater(
+        voice.listen(),
+        throwsA(isA<VoiceInputException>().having((e) => e.kind, 'kind', VoiceErrorKind.notStarted)),
+      );
+      expect(voice.isListening, isFalse);
+
+      // The next tap can listen again.
+      platform.listenStarts = true;
+      final result = voice.listen();
+      await pumpEventQueue();
+      platform.result('What is my name?', last: true);
+      expect(await result, 'What is my name?');
+    });
+
+    test('words alone prove the microphone was open', () async {
+      final result = voice.listen();
+      await pumpEventQueue();
+      platform.result('Where did I');
+      platform.error('error_no_match');
+      expect(await result, 'Where did I');
+    });
+
+    test('concurrent first uses share one initialisation', () async {
+      final both = await Future.wait([voice.initialize(), voice.initialize()]);
+      expect(both, [true, true]);
+      expect(platform.calls, ['initialize']);
+    });
+
+    test('can look up the recogniser by its component name', () async {
+      // ignore: invalid_use_of_visible_for_testing_member
+      final lookup = SpeechToTextVoiceInput(
+        speech: SpeechToText.withMethodChannel(),
+        platform: TargetPlatform.android,
+        lookUpRecognizer: true,
+      );
+      expect(await lookup.initialize(), isTrue);
+      expect(platform.initOptions, contains(SpeechToText.androidIntentLookup));
+      expect(await voice.initialize(), isTrue);
+      expect(platform.initOptions, isNot(contains(SpeechToText.androidIntentLookup)));
     });
 
     test('recognition errors become friendly error kinds', () async {
@@ -192,6 +262,7 @@ void main() {
       expect(SpeechToTextVoiceInput.errorKindFor('error_busy'), VoiceErrorKind.busy);
       expect(SpeechToTextVoiceInput.errorKindFor('error_speech_timeout'), VoiceErrorKind.noSpeech);
       expect(SpeechToTextVoiceInput.errorKindFor('error_language_unavailable'), VoiceErrorKind.unavailable);
+      expect(SpeechToTextVoiceInput.errorKindFor('error_client'), VoiceErrorKind.notStarted);
       expect(SpeechToTextVoiceInput.errorKindFor('error_unknown (42)'), VoiceErrorKind.unknown);
       for (final kind in VoiceErrorKind.values) {
         expect(kind.message, isNot(contains('error_')));
@@ -492,7 +563,7 @@ void main() {
       await tapMic(tester);
       await tester.pumpAndSettle();
 
-      expect(find.textContaining("Voice chat isn't available on this device"), findsOneWidget);
+      expect(find.textContaining("Speech recognition isn't available on this device"), findsOneWidget);
       expect(os.calls, isEmpty);
       expect(os.dialogsShown, isEmpty);
     });
@@ -511,6 +582,26 @@ void main() {
       await tester.tap(find.text('OK'));
       await tester.pumpAndSettle();
       expect(find.text(VoiceErrorKind.network.message), findsNothing);
+    });
+
+    testWidgets('a recogniser that never started is not "I didn\'t hear anything"', (tester) async {
+      await startApp(tester);
+      await startListening(tester);
+      voice.fail(VoiceErrorKind.notStarted);
+      await tester.pumpAndSettle();
+
+      expect(find.text(VoiceErrorKind.notStarted.message), findsOneWidget);
+      expect(find.text(VoiceErrorKind.noSpeech.message), findsNothing);
+      expect(backend.chatRequests, isEmpty);
+
+      // Try again listens once more and the spoken words go through the normal chat.
+      await tester.tap(find.text('Try again'));
+      await frames(tester);
+      expect(find.text('Listening...'), findsOneWidget);
+      voice.finish('What is my name?');
+      await tester.pumpAndSettle();
+      expect(backend.chatRequests, hasLength(1));
+      expect(backend.chatRequests.single['message'], 'What is my name?');
     });
 
     testWidgets('voice replies read the reply aloud and can be stopped', (tester) async {

@@ -84,6 +84,7 @@ class VoiceChatController extends ChangeNotifier {
         _state == VoiceState.requestingPermission) {
       return;
     }
+    _log('mic tapped');
     if (!_voice.isAvailable) return _fail(VoiceErrorKind.unavailable);
 
     // Never listen while a reply is being read aloud: the microphone would hear it.
@@ -103,8 +104,10 @@ class VoiceChatController extends ChangeNotifier {
         notifyListeners();
       });
     } on VoiceInputException catch (e) {
+      _log('listen failed: ${e.kind.name}');
       return _fail(e.kind);
-    } catch (_) {
+    } catch (e) {
+      _log('listen failed: ${e.runtimeType}');
       return _fail(VoiceErrorKind.unknown);
     }
     if (_disposed) return;
@@ -115,7 +118,9 @@ class VoiceChatController extends ChangeNotifier {
 
     _transcript = '';
     _set(VoiceState.idle);
+    _log('sending recognized text');
     await send(text);
+    _log('send complete');
   }
 
   /// Ends the utterance; what was heard so far is sent once.
@@ -186,6 +191,7 @@ class VoiceChatController extends ChangeNotifier {
       status = await _permissions.requestMicrophonePermission();
       fromRequest = true;
     }
+    _log('microphone permission: ${status.name}');
     unawaited(_report(status, fromRequest: fromRequest));
     if (_disposed) return false;
     if (status.isUsable) return true;
@@ -239,4 +245,8 @@ class VoiceChatController extends ChangeNotifier {
     unawaited(_tts.stop());
     super.dispose();
   }
+}
+
+void _log(String message) {
+  if (kDebugMode) debugPrint('[Voice] $message');
 }
