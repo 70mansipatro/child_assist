@@ -52,6 +52,18 @@ export const actionRecipientSchema = z.strictObject({
   address: z.string({ error: "address is required" }).trim().min(1).max(320),
 });
 
+/** The one contact (name and number) the user picked on the phone for a SHARE_CONTACT action. */
+export const actionSharedContactSchema = z.strictObject({
+  conversationId: id.optional(),
+  name: z
+    .string({ error: "name is required" })
+    .trim()
+    .min(1)
+    .max(120)
+    .regex(/^[^\r\n\t<>"]*$/, "Invalid name"),
+  phone: z.string({ error: "phone is required" }).trim().min(1).max(32),
+});
+
 export const actionHandoffSchema = z.strictObject({
   conversationId: id.optional(),
   result: z.enum(["whatsapp_opened", "share_opened", "unavailable"]),

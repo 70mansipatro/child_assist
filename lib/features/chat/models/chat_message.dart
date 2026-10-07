@@ -355,6 +355,9 @@ class PendingAction {
     this.message,
     this.dataSummary,
     this.documentQuery,
+    this.sharedContactQuery,
+    this.sharedContactName,
+    this.sharedContactPhone,
     this.expiresAt,
     this.state = PendingActionState.awaiting,
     this.resultMessage,
@@ -384,6 +387,12 @@ class PendingAction {
 
   /// For a document share: words from the document's name, matched on this phone.
   final String? documentQuery;
+
+  /// For sharing a contact's number: the contact whose number is shared (never the recipient),
+  /// as the user named it. Found on this phone; the user picks the contact and the number.
+  final String? sharedContactQuery;
+  final String? sharedContactName;
+  final String? sharedContactPhone;
   final DateTime? expiresAt;
   final PendingActionState state;
 
@@ -396,6 +405,10 @@ class PendingAction {
   bool get isOpen => state == PendingActionState.awaiting;
   bool get isWhatsApp => channel == ActionChannel.whatsApp;
   bool get isDocumentShare => type == 'SHARE_DOCUMENT';
+  bool get isContactShare => type == 'SHARE_CONTACT';
+
+  /// The contact whose number is shared still has to be picked on the phone.
+  bool get needsSharedContact => isContactShare && sharedContactPhone == null;
 
   /// The contact still has to be found on the phone and picked by the user.
   bool get needsRecipient => recipientAddress == null;
@@ -415,6 +428,9 @@ class PendingAction {
     message: message,
     dataSummary: dataSummary,
     documentQuery: documentQuery,
+    sharedContactQuery: sharedContactQuery,
+    sharedContactName: sharedContactName,
+    sharedContactPhone: sharedContactPhone,
     expiresAt: expiresAt,
     state: state ?? this.state,
     resultMessage: resultMessage ?? this.resultMessage,
@@ -435,6 +451,9 @@ class PendingAction {
     message: server.message,
     dataSummary: server.dataSummary,
     documentQuery: server.documentQuery,
+    sharedContactQuery: server.sharedContactQuery,
+    sharedContactName: server.sharedContactName,
+    sharedContactPhone: server.sharedContactPhone,
     expiresAt: server.expiresAt,
     state: state,
     resultMessage: resultMessage,
@@ -457,6 +476,9 @@ class PendingAction {
       message: text('message'),
       dataSummary: text('dataSummary'),
       documentQuery: text('documentQuery'),
+      sharedContactQuery: text('sharedContactQuery'),
+      sharedContactName: text('sharedContactName'),
+      sharedContactPhone: text('sharedContactPhone'),
       expiresAt: DateTime.tryParse(json['expiresAt'] as String? ?? ''),
     );
   }

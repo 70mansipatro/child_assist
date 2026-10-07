@@ -41,6 +41,16 @@ const shareFields = {
   endDate: localDate("endDate").optional().describe("Last local day, YYYY-MM-DD (inclusive)."),
 };
 
+const shareContactField = {
+  shareContactNumber: contactName
+    .optional()
+    .describe(
+      "To send one contact's phone number to someone (\"send <A>'s number to <B>\"): <A>'s name exactly as " +
+        "the user said it. <B> goes in recipientName. The app looks <A> up on the phone and the user picks " +
+        "the contact and number; the server writes the message. Never put a number in `message`.",
+    ),
+};
+
 const awaitingNote =
   "Nothing has been sent. The app now shows the user exactly what will be sent (and, if the " +
   "recipient was given by name, lets them pick the contact on their phone). Tell them to check " +
@@ -78,14 +88,34 @@ async function draftFor(
   ctx: ToolContext,
   channel: ChatActionChannel,
   recipient: Recipient,
-  content: { message?: string; subject?: string; documentName?: string } & ShareInput,
+  content: { message?: string; subject?: string; documentName?: string; shareContactNumber?: string } & ShareInput,
 ): Promise<ToolResult<ActionDraft>> {
   if (!recipient.name && !recipient.address) {
     return fail("INVALID_ARGUMENTS", "Say who to send it to: ask the user for the contact's name.");
   }
   // A name is looked up in the phone's contacts, which needs the Contacts permission.
-  if (!recipient.address && !(await hasPermission(ctx.userId, PermissionType.CONTACTS))) {
+  if ((!recipient.address || content.shareContactNumber) && !(await hasPermission(ctx.userId, PermissionType.CONTACTS))) {
     return permissionRequired(PermissionType.CONTACTS);
+  }
+
+  if (content.shareContactNumber) {
+    if (content.share || content.documentName) {
+      return fail("INVALID_ARGUMENTS", "Share either a contact's number, locations or a document, not several.");
+    }
+    // The message is built only after the user picks the contact and number on the phone, so any
+    // text (or number) the model wrote is ignored: it can never put a guessed number in it.
+    return ok({
+      type: ChatActionType.SHARE_CONTACT,
+      channel,
+      contactQuery: recipient.address ? null : (recipient.name ?? null),
+      recipientName: recipient.name ?? null,
+      recipientAddress: recipient.address ?? null,
+      subject: channel === ChatActionChannel.EMAIL ? `${content.shareContactNumber}'s phone number` : null,
+      message: null,
+      dataSummary: null,
+      documentQuery: null,
+      sharedContactQuery: content.shareContactNumber,
+    });
   }
 
   let message = content.message?.trim() ?? "";
@@ -128,6 +158,7 @@ async function draftFor(
     message,
     dataSummary,
     documentQuery: content.documentName ?? null,
+    sharedContactQuery: null,
   });
 }
 
@@ -206,10 +237,11 @@ export function communicationTools(ctx: ToolContext) {
           .optional()
           .describe("The email text. For 'ye details', write the details from this conversation."),
         documentName: z.string().trim().max(120).optional().describe("Not supported for email"),
+        ...shareContactField,
         ...shareFields,
       }),
       selfAudited: true,
-      execute: async ({ recipientName, recipientEmail, subject, message, documentName, ...share }, toolCtx) => {
+      execute: async ({ recipientName, recipientEmail, subject, message, documentName, shareContactNumber, ...share }, toolCtx) => {
         if (!emailConfigured()) {
           return fail("ACTION_NOT_CONFIGURED", "Sending email is not set up on the Child Assist server. Nothing was prepared.");
         }
@@ -230,6 +262,7 @@ export function communicationTools(ctx: ToolContext) {
         const draft = await draftFor(toolCtx, ChatActionChannel.EMAIL, { name: recipientName, address: recipientEmail }, {
           message,
           subject,
+          shareContactNumber,
           ...share,
         });
         if (!draft.success) return draft;
@@ -258,10 +291,11 @@ export function communicationTools(ctx: ToolContext) {
           .regex(/^[^\r\n\t<>"]+$/)
           .optional()
           .describe("To share one of the user's documents: words from its file name"),
+        ...shareContactField,
         ...shareFields,
       }),
       selfAudited: true,
-      execute: async ({ recipientName, recipientPhone, message, documentName, ...share }, toolCtx) => {
+      execute: async ({ recipientName, recipientPhone, message, documentName, shareContactNumber, ...share }, toolCtx) => {
         let phone: string | undefined;
         if (recipientPhone !== undefined) {
           phone = normalizePhone(recipientPhone) ?? undefined;
@@ -270,6 +304,7 @@ export function communicationTools(ctx: ToolContext) {
         const draft = await draftFor(toolCtx, ChatActionChannel.WHATSAPP, { name: recipientName, address: phone }, {
           message,
           documentName,
+          shareContactNumber,
           ...share,
         });
         if (!draft.success) return draft;

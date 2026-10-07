@@ -11,6 +11,7 @@ import { prisma } from "../../../lib/prisma";
 import { addMessage, recordToolCall, transitionToolCall, type ToolCallStatus } from "../chat.service";
 import type { PendingActionView, ToolContext } from "../tools/types";
 import { isValidEmail, sendUserEmail } from "./email.service";
+import { buildContactPhoneShareMessage } from "./share-content";
 
 // Side-effect actions (an email, a WhatsApp message) never run inside a chat turn. The assistant
 // only *prepares* one: it is stored as a PENDING ChatAction (plus an AWAITING_CONFIRMATION audit
@@ -28,7 +29,13 @@ import { isValidEmail, sendUserEmail } from "./email.service";
 export const PENDING_ACTION_TTL_MS = 10 * 60 * 1000;
 
 /** Content cleared when an action is finished: it was only kept so the user could confirm it. */
-const SCRUBBED = { recipientAddress: null, subject: null, message: null } as const;
+const SCRUBBED = {
+  recipientAddress: null,
+  subject: null,
+  message: null,
+  sharedContactName: null,
+  sharedContactPhone: null,
+} as const;
 
 export interface ActionDraft {
   type: ChatActionType;
@@ -38,9 +45,12 @@ export interface ActionDraft {
   recipientName: string | null;
   recipientAddress: string | null;
   subject: string | null;
-  message: string;
+  /** Null for SHARE_CONTACT until the shared contact is picked on the phone. */
+  message: string | null;
   dataSummary: string | null;
   documentQuery: string | null;
+  /** For SHARE_CONTACT: the name of the contact whose number is shared, as the user said it. */
+  sharedContactQuery: string | null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -60,6 +70,9 @@ export function summaryFor(action: ChatAction): string {
   const target = who(action);
   const via = action.channel === ChatActionChannel.EMAIL ? "by email" : "on WhatsApp";
   switch (action.type) {
+    case ChatActionType.SHARE_CONTACT:
+      if (action.channel === ChatActionChannel.WHATSAPP) return `Send this WhatsApp message to ${target}?`;
+      return `Send an email to ${target}?`;
     case ChatActionType.SEND_EMAIL:
       return action.subject
         ? `Send an email to ${target} with the subject "${action.subject}"?`
@@ -98,6 +111,9 @@ export function toView(action: ChatAction): PendingActionView {
     message: action.message,
     dataSummary: action.dataSummary,
     documentQuery: action.documentQuery,
+    sharedContactQuery: action.sharedContactQuery,
+    sharedContactName: action.sharedContactName,
+    sharedContactPhone: action.sharedContactPhone,
     expiresAt: action.expiresAt.toISOString(),
   };
 }
@@ -144,6 +160,7 @@ export async function preparePendingAction(ctx: ToolContext, draft: ActionDraft)
       message: draft.message,
       dataSummary: draft.dataSummary,
       documentQuery: draft.documentQuery,
+      sharedContactQuery: draft.sharedContactQuery,
       expiresAt: new Date(Date.now() + PENDING_ACTION_TTL_MS),
     },
   });
@@ -187,6 +204,9 @@ async function rejection(userId: string, id: string, scope: ActionScope, expecte
   if (action.status === ChatActionStatus.EXPIRED || (action.status === expected && action.expiresAt <= new Date())) {
     await expireStaleActions();
     return new HttpError(410, "This action has expired. Please ask Child Assist again.", "ACTION_EXPIRED");
+  }
+  if (action.status === expected && action.type === ChatActionType.SHARE_CONTACT && action.sharedContactPhone === null) {
+    return new HttpError(409, "Choose whose number to share first.", "SHARED_CONTACT_REQUIRED");
   }
   if (action.status === expected && action.recipientAddress === null) {
     return new HttpError(409, "Choose who to send it to first.", "RECIPIENT_REQUIRED");
@@ -239,6 +259,51 @@ export async function setActionRecipient(
   return toView(await load(userId, id, scope));
 }
 
+/**
+ * Sets the contact whose number a SHARE_CONTACT action shares, after the user picked the contact
+ * and the number on the phone, and builds the message from exactly those values. Only this one
+ * name and number are sent by the app. It never touches the recipient, and the recipient never
+ * touches it, so the two numbers cannot be swapped. It can be set once.
+ */
+export async function setSharedContact(
+  userId: string,
+  id: string,
+  input: { name: string; phone: string },
+  scope: ActionScope = {},
+): Promise<PendingActionView> {
+  const action = await load(userId, id, scope);
+  if (action.type !== ChatActionType.SHARE_CONTACT) throw notFound();
+  const phone = normalizePhone(input.phone);
+  if (!phone) throw new HttpError(400, "That phone number doesn't look right.", "INVALID_PHONE");
+  const name = input.name.trim() || action.sharedContactQuery;
+  if (!name) throw new HttpError(400, "The contact's name is required.", "INVALID_NAME");
+
+  const { count } = await prisma.chatAction.updateMany({
+    where: {
+      id,
+      userId,
+      type: ChatActionType.SHARE_CONTACT,
+      status: ChatActionStatus.PENDING,
+      sharedContactPhone: null,
+      expiresAt: { gt: new Date() },
+    },
+    data: {
+      sharedContactName: name,
+      sharedContactPhone: phone,
+      message: buildContactPhoneShareMessage(name, phone),
+      dataSummary: `${name}'s phone number`,
+    },
+  });
+  if (count === 0) {
+    const current = await load(userId, id, scope);
+    if (current.status === ChatActionStatus.PENDING && current.sharedContactPhone !== null && current.expiresAt > new Date()) {
+      throw new HttpError(409, "The contact to share has already been chosen.", "SHARED_CONTACT_ALREADY_SET");
+    }
+    throw await rejection(userId, id, scope, ChatActionStatus.PENDING);
+  }
+  return toView(await load(userId, id, scope));
+}
+
 export interface ActionOutcome extends PendingActionView {
   /** What the app shows on the card (also stored as an assistant message when final). */
   outcomeMessage: string;
@@ -265,6 +330,9 @@ export async function confirmPendingAction(userId: string, id: string, scope: Ac
       status: ChatActionStatus.PENDING,
       expiresAt: { gt: now },
       recipientAddress: { not: null },
+      message: { not: null },
+      // A shared number must have been picked on the phone; the model never supplies it.
+      OR: [{ type: { not: ChatActionType.SHARE_CONTACT } }, { sharedContactPhone: { not: null } }],
     },
     // The phone gets a fresh window to open WhatsApp after the user confirmed.
     data: { status: ChatActionStatus.CONFIRMED, confirmedAt: now, expiresAt: new Date(now.getTime() + PENDING_ACTION_TTL_MS) },

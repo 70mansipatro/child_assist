@@ -8,6 +8,7 @@ class ContactItem {
     required this.id,
     required this.displayName,
     this.phoneNumbers = const [],
+    this.phoneLabels = const [],
     this.emails = const [],
   });
 
@@ -15,7 +16,15 @@ class ContactItem {
   final String id;
   final String displayName;
   final List<String> phoneNumbers;
+
+  /// The label of each of [phoneNumbers] in the same order ("Mobile", "Home", a custom label),
+  /// or empty when unknown.
+  final List<String> phoneLabels;
   final List<String> emails;
+
+  /// The label saved for the phone number at [index], if any.
+  String? phoneLabel(int index) =>
+      index < phoneLabels.length && phoneLabels[index].trim().isNotEmpty ? phoneLabels[index] : null;
 
   /// [displayName] for matching: lower case, punctuation removed, single spaces.
   String get normalizedName => normalizeContactName(displayName);

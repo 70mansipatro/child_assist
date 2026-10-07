@@ -45,7 +45,7 @@ export interface PendingActionView {
   id: string;
   /** The tool that prepared it, e.g. "prepare_email". */
   toolName: string;
-  type: "SEND_EMAIL" | "SEND_WHATSAPP" | "SHARE_LOCATION" | "SHARE_TRAVEL_HISTORY" | "SHARE_DOCUMENT";
+  type: "SEND_EMAIL" | "SEND_WHATSAPP" | "SHARE_LOCATION" | "SHARE_TRAVEL_HISTORY" | "SHARE_DOCUMENT" | "SHARE_CONTACT";
   channel: "EMAIL" | "WHATSAPP";
   status: "PENDING" | "CONFIRMED" | "CANCELLED" | "COMPLETED" | "FAILED" | "EXPIRED";
   summary: string;
@@ -64,6 +64,14 @@ export interface PendingActionView {
   dataSummary: string | null;
   /** For a document share: the document name to match among the documents on the phone. */
   documentQuery: string | null;
+  /**
+   * For SHARE_CONTACT: the contact whose number is shared (not the recipient). While
+   * [sharedContactPhone] is null the app looks [sharedContactQuery] up on the phone and the user
+   * picks the contact and number; the message is then built from exactly that.
+   */
+  sharedContactQuery: string | null;
+  sharedContactName: string | null;
+  sharedContactPhone: string | null;
   expiresAt: string;
 }
 

@@ -15,6 +15,8 @@ chatRouter.delete("/conversations/:id", chatController.deleteConversation);
 // The recipient is the one contact the user picked on the phone; handoff reports that WhatsApp (or
 // the share sheet) was opened for a confirmed message, which the user then sends themselves.
 chatRouter.post("/actions/:id/recipient", chatController.chooseActionRecipient);
+// For "send A's number to B": the contact (A) and number the user picked, kept apart from B.
+chatRouter.post("/actions/:id/shared-contact", chatController.chooseSharedContact);
 chatRouter.post("/actions/:id/confirm", chatController.confirmAction);
 chatRouter.post("/actions/:id/cancel", chatController.cancelAction);
 chatRouter.post("/actions/:id/handoff", chatController.actionHandoff);

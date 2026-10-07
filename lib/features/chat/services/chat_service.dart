@@ -91,6 +91,11 @@ class ChatService {
         (token) => _api.chooseRecipient(token, id, address: address, name: name, conversationId: conversationId),
       );
 
+  Future<PendingAction> chooseSharedContact(String id, {required String name, required String phone, String? conversationId}) =>
+      _auth.authorized(
+        (token) => _api.chooseSharedContact(token, id, name: name, phone: phone, conversationId: conversationId),
+      );
+
   Future<ActionOutcome> confirmAction(String id, {String? conversationId}) =>
       _auth.authorized((token) => _api.confirmAction(token, id, conversationId: conversationId));
 

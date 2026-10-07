@@ -187,14 +187,22 @@ class ChatSession extends ChangeNotifier {
 
   /// Sets who an action goes to: the one contact address the user picked on this phone (or
   /// typed). Returns an error to show, or null when the server accepted it.
-  Future<String?> chooseRecipient(String actionId, {required String address, String? name}) async {
-    try {
-      final server = await _service.chooseRecipient(
+  Future<String?> chooseRecipient(String actionId, {required String address, String? name}) => _updateFromServer(
+    actionId,
+    () => _service.chooseRecipient(actionId, address: address, name: name, conversationId: _conversationId),
+  );
+
+  /// For sharing a contact's number: the contact and number the user picked on this phone. The
+  /// server builds the message from them. Returns an error to show, or null on success.
+  Future<String?> chooseSharedContact(String actionId, {required String name, required String phone}) =>
+      _updateFromServer(
         actionId,
-        address: address,
-        name: name,
-        conversationId: _conversationId,
+        () => _service.chooseSharedContact(actionId, name: name, phone: phone, conversationId: _conversationId),
       );
+
+  Future<String?> _updateFromServer(String actionId, Future<PendingAction> Function() request) async {
+    try {
+      final server = await request();
       _updateAction(actionId, (a) => a.updatedFrom(server));
       return null;
     } on ApiException catch (e) {

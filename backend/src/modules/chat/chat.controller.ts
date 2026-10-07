@@ -5,6 +5,7 @@ import {
   completeHandoff,
   confirmPendingAction,
   setActionRecipient,
+  setSharedContact,
 } from "./actions/pending-actions";
 import { handleChatTurn } from "./chat.orchestrator";
 import * as chatService from "./chat.service";
@@ -12,6 +13,7 @@ import {
   actionHandoffSchema,
   actionRecipientSchema,
   actionScopeSchema,
+  actionSharedContactSchema,
   chatRequestSchema,
   createConversationSchema,
   idParamsSchema,
@@ -64,6 +66,13 @@ export async function chooseActionRecipient(req: Request, res: Response): Promis
   const { id } = idParamsSchema.parse(req.params);
   const { conversationId, name, address } = actionRecipientSchema.parse(req.body ?? {});
   const action = await setActionRecipient(getAuth(req).userId, id, { name, address }, { conversationId });
+  res.status(200).json({ action });
+}
+
+export async function chooseSharedContact(req: Request, res: Response): Promise<void> {
+  const { id } = idParamsSchema.parse(req.params);
+  const { conversationId, name, phone } = actionSharedContactSchema.parse(req.body ?? {});
+  const action = await setSharedContact(getAuth(req).userId, id, { name, phone }, { conversationId });
   res.status(200).json({ action });
 }
 

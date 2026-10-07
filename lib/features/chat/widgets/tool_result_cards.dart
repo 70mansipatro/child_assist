@@ -12,6 +12,9 @@ import 'contact_result_card.dart';
 /// Sets an action's recipient; returns an error to show, or null on success.
 typedef ChooseRecipient = Future<String?> Function(String actionId, {required String address, String? name});
 
+/// Sets whose number an action shares; returns an error to show, or null on success.
+typedef ChooseSharedContact = Future<String?> Function(String actionId, {required String name, required String phone});
+
 /// What the result cards need from the screen: the on-device services and navigation.
 class ChatResultContext {
   const ChatResultContext({
@@ -24,6 +27,7 @@ class ChatResultContext {
     required this.onOpenDocument,
     required this.onOpenPhoto,
     required this.onChooseRecipient,
+    required this.onChooseSharedContact,
     required this.onConfirmAction,
     required this.onCancelAction,
     required this.onShareInstead,
@@ -42,6 +46,7 @@ class ChatResultContext {
   final ValueChanged<DocumentItem> onOpenDocument;
   final ValueChanged<PhotoItem> onOpenPhoto;
   final ChooseRecipient onChooseRecipient;
+  final ChooseSharedContact onChooseSharedContact;
 
   /// Confirms an action; [document] is the file picked for a document share.
   final void Function(String actionId, DocumentItem? document) onConfirmAction;

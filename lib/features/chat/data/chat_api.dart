@@ -109,6 +109,25 @@ class ChatApi {
     return action;
   }
 
+  /// For sharing a contact's number: the contact and number the user picked on this phone. The
+  /// server builds the message from exactly these; nothing else from the address book is sent.
+  Future<PendingAction> chooseSharedContact(
+    String token,
+    String id, {
+    required String name,
+    required String phone,
+    String? conversationId,
+  }) async {
+    final json = await _client.post(
+      '/api/chat/actions/${Uri.encodeComponent(id)}/shared-contact',
+      token: token,
+      body: {'name': name, 'phone': phone, 'conversationId': ?conversationId},
+    );
+    final action = PendingAction.tryParse(json['action'] as Map<String, dynamic>? ?? const {});
+    if (action == null) throw ApiException('Something went wrong. Please try again.');
+    return action;
+  }
+
   /// Runs an action the user explicitly confirmed. Returns the server's outcome.
   Future<ActionOutcome> confirmAction(String token, String id, {String? conversationId}) =>
       _action(token, id, 'confirm', {'conversationId': ?conversationId});

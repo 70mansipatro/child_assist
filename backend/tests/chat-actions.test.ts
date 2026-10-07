@@ -654,3 +654,168 @@ describe("actions: security", () => {
     assert.equal(guardReply("I've prepared the email. Please confirm.", true), "I've prepared the email. Please confirm.");
   });
 });
+
+describe("whatsapp: sharing one contact's number with another contact", () => {
+  // Generated fixtures: nothing here (or in the code) depends on any particular name or number.
+  const randomDigits = (n: number) => Array.from({ length: n }, () => Math.floor(Math.random() * 10)).join("");
+  function fixture() {
+    const tag = randomUUID().slice(0, 6);
+    return {
+      contactName: `Contact ${tag}`,
+      requestedPhone: `+1${randomDigits(10)}`,
+      recipientName: `Recipient ${tag}`,
+      recipientPhone: `+44${randomDigits(10)}`,
+    };
+  }
+
+  async function prepareShare(user: TestUser, f: ReturnType<typeof fixture>, extra: Record<string, unknown> = {}) {
+    // The model even writes a message with an invented number; it must be ignored.
+    const model = toolThen(
+      "prepare_whatsapp",
+      { recipientName: f.recipientName, shareContactNumber: f.contactName, message: "Here is the number: 0000000000", ...extra },
+      "Please pick the contact and confirm.",
+    );
+    setChatModels({ chat: model });
+    const res = await chat(user, { message: `Send ${f.contactName}'s number to ${f.recipientName}` });
+    assert.equal(res.status, 200, res.raw);
+    return { res, model, pending: res.json.pendingActions[0], conversationId: res.json.conversationId as string };
+  }
+
+  test("prepares a pending action that keeps the shared contact apart from the recipient", async () => {
+    const f = fixture();
+    const { pending, model } = await prepareShare(userA, f);
+    assert.equal(pending.type, "SHARE_CONTACT");
+    assert.equal(pending.channel, "WHATSAPP");
+    assert.equal(pending.status, "PENDING");
+    assert.equal(pending.sharedContactQuery, f.contactName);
+    assert.equal(pending.contactQuery, f.recipientName);
+    assert.equal(pending.sharedContactPhone, null);
+    assert.equal(pending.message, null, "the model's text (and its invented number) is never used");
+    // Nothing about the phone's contacts reached the model.
+    assert.doesNotMatch(JSON.stringify(model.seen), /0000000000|phones|\+\d{9,}/);
+    const row = await prisma.chatAction.findUniqueOrThrow({ where: { id: pending.id } });
+    assert.equal(row.userId, userA.id);
+    assert.ok(row.expiresAt.getTime() - row.createdAt.getTime() <= 10 * 60 * 1000 + 1000);
+  });
+
+  test("needs Contacts permission", async () => {
+    await setPermission(userA, PermissionType.CONTACTS, PermissionStatus.DENIED);
+    const f = fixture();
+    const { res } = await prepareShare(userA, f, { recipientName: undefined, recipientPhone: f.recipientPhone });
+    assert.deepEqual(res.json.pendingActions, []);
+    assert.equal(res.json.toolEvents[0].permission, "CONTACTS");
+  });
+
+  test("the message carries the picked contact's number, never the recipient's", async () => {
+    const f = fixture();
+    const { pending, conversationId } = await prepareShare(userA, f);
+
+    // Not confirmable until both people are picked.
+    await action(userA, pending.id, "recipient", { address: f.recipientPhone, name: f.recipientName });
+    const early = await action(userA, pending.id, "confirm");
+    assert.equal(early.status, 409, early.raw);
+    assert.equal(early.json.code, "SHARED_CONTACT_REQUIRED");
+
+    const shared = await action(userA, pending.id, "shared-contact", {
+      conversationId,
+      name: f.contactName,
+      phone: f.requestedPhone,
+    });
+    assert.equal(shared.status, 200, shared.raw);
+    const view = shared.json.action;
+    const expected = `Here is ${f.contactName}'s phone number: ${f.requestedPhone}`;
+    assert.equal(view.message, expected);
+    assert.ok(view.message.includes(f.requestedPhone));
+    assert.ok(!view.message.includes(f.recipientPhone), "the recipient's number is never put in the message");
+    assert.equal(view.sharedContactName, f.contactName);
+    assert.equal(view.sharedContactPhone, f.requestedPhone);
+    assert.equal(view.recipientAddress, f.recipientPhone, "the recipient stays the recipient");
+    assert.equal(view.summary, `Send this WhatsApp message to ${f.recipientName} (${f.recipientPhone})?`);
+
+    const confirmed = await action(userA, pending.id, "confirm", { conversationId });
+    assert.equal(confirmed.status, 200, confirmed.raw);
+    assert.deepEqual(confirmed.json.action.handoff, { phone: f.recipientPhone, message: expected, documentQuery: null });
+    assert.equal(sentEmails.length, 0);
+
+    const again = await action(userA, pending.id, "confirm");
+    assert.equal(again.status, 409, "already confirmed");
+    await action(userA, pending.id, "handoff", { result: "whatsapp_opened" });
+    const row = await prisma.chatAction.findUniqueOrThrow({ where: { id: pending.id } });
+    assert.equal(row.status, "COMPLETED");
+    assert.equal(row.sharedContactPhone, null, "numbers are cleared once done");
+    assert.equal(row.recipientAddress, null);
+  });
+
+  test("works in either order, for any names and numbers", async () => {
+    for (let i = 0; i < 3; i++) {
+      const f = fixture();
+      const { pending } = await prepareShare(userA, f);
+      await action(userA, pending.id, "shared-contact", { name: f.contactName, phone: f.requestedPhone });
+      const set = await action(userA, pending.id, "recipient", { address: f.recipientPhone, name: f.recipientName });
+      assert.equal(set.json.action.message, `Here is ${f.contactName}'s phone number: ${f.requestedPhone}`);
+      assert.equal(set.json.action.recipientAddress, f.recipientPhone);
+    }
+  });
+
+  test("the shared contact is validated, set once, and only on this kind of action", async () => {
+    const f = fixture();
+    const { pending } = await prepareShare(userA, f);
+    assert.equal((await action(userA, pending.id, "shared-contact", { name: f.contactName, phone: "not a number" })).status, 400);
+    assert.equal((await action(userA, pending.id, "shared-contact", { name: f.contactName })).status, 400);
+    assert.equal(
+      (await action(userA, pending.id, "shared-contact", { name: f.contactName, phone: f.requestedPhone, userId: userB.id })).status,
+      400,
+    );
+    assert.equal((await action(userA, pending.id, "shared-contact", { name: f.contactName, phone: f.requestedPhone })).status, 200);
+    const swap = await action(userA, pending.id, "shared-contact", { name: f.recipientName, phone: f.recipientPhone });
+    assert.equal(swap.status, 409, swap.raw);
+    assert.ok((await prisma.chatAction.findUniqueOrThrow({ where: { id: pending.id } })).message?.includes(f.requestedPhone));
+
+    const plain = await prepareWhatsApp(userA);
+    assert.equal((await action(userA, plain.pending.id, "shared-contact", { name: f.contactName, phone: f.requestedPhone })).status, 404);
+  });
+
+  test("other users, missing tokens, cancelled and expired actions are refused", async () => {
+    const f = fixture();
+    const { pending } = await prepareShare(userA, f);
+    const anonymous = await call("POST", `/api/chat/actions/${pending.id}/shared-contact`, {
+      body: { name: f.contactName, phone: f.requestedPhone },
+    });
+    assert.equal(anonymous.status, 401);
+    assert.equal((await action(userB, pending.id, "shared-contact", { name: f.contactName, phone: f.requestedPhone })).status, 404);
+    await action(userA, pending.id, "shared-contact", { name: f.contactName, phone: f.requestedPhone });
+    await action(userA, pending.id, "recipient", { address: f.recipientPhone });
+    assert.equal((await action(userB, pending.id, "confirm")).status, 404);
+
+    await action(userA, pending.id, "cancel");
+    assert.equal((await action(userA, pending.id, "confirm")).status, 409, "cancelled");
+
+    const late = await prepareShare(userA, fixture());
+    await action(userA, late.pending.id, "shared-contact", { name: f.contactName, phone: f.requestedPhone });
+    await action(userA, late.pending.id, "recipient", { address: f.recipientPhone });
+    await prisma.chatAction.update({ where: { id: late.pending.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+    assert.equal((await action(userA, late.pending.id, "confirm")).status, 410, "expired");
+  });
+
+  test("production code holds no contact names or phone numbers", async () => {
+    const { readdir, readFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    async function files(dir: string): Promise<string[]> {
+      const out: string[] = [];
+      for (const entry of await readdir(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) out.push(...(await files(path)));
+        else if (path.endsWith(".ts")) out.push(path);
+      }
+      return out;
+    }
+    for (const file of await files(join(__dirname, "..", "src"))) {
+      const source = await readFile(file, "utf8");
+      // The names and numbers from the reported bug, used here only as a search fixture.
+      for (const banned of [/\baunty\b/i, /\bmani\b/i, /8895346468/, /7847014067/]) {
+        assert.doesNotMatch(source, banned, `${file} contains ${banned}`);
+      }
+      assert.doesNotMatch(source, /["'`]\+?\d{10,13}["'`]/, `${file} contains a phone-number literal`);
+    }
+  });
+});

@@ -12,6 +12,15 @@ import {
 } from "../../../lib/local-dates";
 import { searchLocations } from "../../location/location.service";
 
+/**
+ * The message for sharing one contact's phone number: "Here is <name>'s phone number: <phone>".
+ * Both values come from the contact the user picked on their phone (never from the model), so the
+ * number in the message is always the shared contact's, never the recipient's.
+ */
+export function buildContactPhoneShareMessage(contactName: string, phoneNumber: string): string {
+  return `Here is ${contactName}'s phone number: ${phoneNumber}`;
+}
+
 // The exact text that is shared when the user asks to email or WhatsApp their location or travel
 // history. Built by the backend from the user's own saved locations when the action is prepared,
 // so the confirmation shows precisely what will be sent; the model never writes this data.

@@ -89,6 +89,7 @@ class _ChatScreenState extends State<ChatScreen> {
         _push(DocumentViewerScreen(document: document, documentService: widget.documentService)),
     onOpenPhoto: (photo) => _push(PhotoViewerScreen(photo: photo, galleryService: widget.galleryService)),
     onChooseRecipient: _session.chooseRecipient,
+    onChooseSharedContact: _session.chooseSharedContact,
     onConfirmAction: (id, document) => _session.confirmAction(id, document: document),
     onCancelAction: _session.cancelAction,
     onShareInstead: _session.shareInstead,

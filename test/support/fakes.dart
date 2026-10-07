@@ -703,7 +703,7 @@ class FakeBackend {
         return _json(200, {'success': true});
       }
     }
-    final action = RegExp(r'^/api/chat/actions/([^/]+)/(recipient|confirm|cancel|handoff)$').firstMatch(path);
+    final action = RegExp(r'^/api/chat/actions/([^/]+)/(recipient|shared-contact|confirm|cancel|handoff)$').firstMatch(path);
     if (action != null && req.method == 'POST') {
       return _handleAction(action.group(1)!, action.group(2)!, req.body.isEmpty ? {} : jsonDecode(req.body), userId);
     }
@@ -735,6 +735,22 @@ class FakeBackend {
     const handled = {'message': 'This action has already been handled', 'code': 'ACTION_ALREADY_HANDLED'};
 
     switch (verb) {
+      case 'shared-contact':
+        // Like the real server: only for SHARE_CONTACT, set once, and the message is built here
+        // from the picked name and number. The recipient is never touched.
+        if (a['type'] != 'SHARE_CONTACT') return _json(404, {'message': 'Action not found'});
+        if (a['status'] != 'PENDING') return _json(409, handled);
+        if (a['sharedContactPhone'] != null) return _json(409, {'message': 'The contact to share has already been chosen.'});
+        final phone = (body['phone'] as String? ?? '').trim();
+        final contactName = (body['name'] as String? ?? '').trim();
+        if (phone.replaceAll(RegExp(r'\D'), '').length < 7 || contactName.isEmpty) {
+          return _json(400, {'message': "That phone number doesn't look right."});
+        }
+        a['sharedContactName'] = contactName;
+        a['sharedContactPhone'] = phone;
+        a['message'] = "Here is $contactName's phone number: $phone";
+        a['dataSummary'] = "$contactName's phone number";
+        return view();
       case 'recipient':
         if (a['status'] != 'PENDING') return _json(409, handled);
         if (a['recipientAddress'] != null) return _json(409, {'message': 'The recipient has already been chosen.'});
@@ -757,6 +773,9 @@ class FakeBackend {
         return view();
       case 'confirm':
         if (a['status'] != 'PENDING') return _json(409, handled);
+        if (a['type'] == 'SHARE_CONTACT' && a['sharedContactPhone'] == null) {
+          return _json(409, {'message': 'Choose whose number to share first.', 'code': 'SHARED_CONTACT_REQUIRED'});
+        }
         if (a['recipientAddress'] == null) return _json(409, {'message': 'Choose who to send it to first.'});
         if (email) {
           if (emailFails) {

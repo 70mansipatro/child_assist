@@ -251,6 +251,8 @@ enum ChatActionType {
   SHARE_LOCATION
   SHARE_TRAVEL_HISTORY
   SHARE_DOCUMENT
+  // Another contact's phone number, looked up and picked on the phone ("send A's number to B").
+  SHARE_CONTACT
 }
 
 // How the action reaches the recipient. EMAIL is sent by the backend over SMTP; WHATSAPP is opened
@@ -278,6 +280,11 @@ model ChatAction {
   dataSummary      String?           @map("data_summary") @db.VarChar(300)
   // For SHARE_DOCUMENT: the document name the user mentioned, matched on the phone.
   documentQuery    String?           @map("document_query") @db.VarChar(120)
+  // For SHARE_CONTACT: the contact whose number is shared, kept apart from the recipient. The name
+  // the user said is resolved on the phone; the picked name and number then build the message.
+  sharedContactQuery String?         @map("shared_contact_query") @db.VarChar(120)
+  sharedContactName  String?         @map("shared_contact_name") @db.VarChar(120)
+  sharedContactPhone String?         @map("shared_contact_phone") @db.VarChar(32)
   expiresAt        DateTime          @map("expires_at")
   confirmedAt      DateTime?         @map("confirmed_at")
   completedAt      DateTime?         @map("completed_at")

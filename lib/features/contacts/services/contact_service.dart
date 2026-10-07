@@ -1,5 +1,5 @@
 import 'package:flutter/foundation.dart';
-import 'package:flutter_contacts/flutter_contacts.dart' show ContactProperty, FlutterContacts;
+import 'package:flutter_contacts/flutter_contacts.dart' show ContactProperty, FlutterContacts, Phone, PhoneLabel;
 
 import '../models/contact_item.dart';
 import 'contact_permission_service.dart';
@@ -18,16 +18,34 @@ class DeviceContactsSource implements ContactsSource {
   Future<List<ContactItem>> readAll() async {
     // Only phones and emails are requested; the display name and ID always come with them.
     final contacts = await FlutterContacts.getAll(properties: {ContactProperty.phone, ContactProperty.email});
-    return [
-      for (final c in contacts)
-        if (c.id != null && (c.displayName?.trim().isNotEmpty ?? false))
-          ContactItem(
-            id: c.id!,
-            displayName: c.displayName!.trim(),
-            phoneNumbers: _unique([for (final p in c.phones) p.number], (n) => n.replaceAll(RegExp(r'[^\d+]'), '')),
-            emails: _unique([for (final e in c.emails) e.address], (e) => e.toLowerCase()),
-          ),
-    ];
+    final result = <ContactItem>[];
+    for (final c in contacts) {
+      if (c.id == null || (c.displayName?.trim().isEmpty ?? true)) continue;
+      // The same number saved twice (differently formatted) is listed once, with its first label.
+      final seen = <String>{};
+      final phones = <Phone>[
+        for (final p in c.phones)
+          if (p.number.trim().isNotEmpty && seen.add(p.number.replaceAll(RegExp(r'[^\d+]'), ''))) p,
+      ];
+      result.add(
+        ContactItem(
+          id: c.id!,
+          displayName: c.displayName!.trim(),
+          phoneNumbers: [for (final p in phones) p.number.trim()],
+          phoneLabels: [for (final p in phones) _label(p)],
+          emails: _unique([for (final e in c.emails) e.address], (e) => e.toLowerCase()),
+        ),
+      );
+    }
+    return result;
+  }
+
+  /// "Mobile", "Work mobile", or the user's own label.
+  static String _label(Phone phone) {
+    final custom = phone.label.customLabel?.trim();
+    if (phone.label.label == PhoneLabel.custom && custom != null && custom.isNotEmpty) return custom;
+    final words = phone.label.label.name.replaceAllMapped(RegExp('[A-Z]'), (m) => ' ${m[0]!.toLowerCase()}');
+    return words[0].toUpperCase() + words.substring(1);
   }
 
   static List<String> _unique(List<String> values, String Function(String) key) {

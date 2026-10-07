@@ -10,11 +10,12 @@ import 'tool_result_cards.dart';
 
 /// Asks before anything leaves the app: an email, or a WhatsApp message.
 ///
-/// When the recipient was given by name, the contact is found on this phone first and the user
-/// picks the right one (only that one address is sent to the server). The card then shows exactly
-/// what will be sent: recipient, subject, any sensitive data and the message, all as the server
-/// stored it. Nothing is sent unless the user taps Confirm, and a WhatsApp message is only ever
-/// opened in WhatsApp for the user to send.
+/// People named in the request are found on this phone first and the user picks the right
+/// contact and number (only those are sent to the server). For "send A's number to B" that is
+/// done twice, separately: first A, the contact whose number is shared, then B, the recipient.
+/// The card then shows exactly what will be sent, as the server stored it: recipient, subject, any
+/// sensitive data and the message. Nothing is sent unless the user taps Confirm, and a WhatsApp
+/// message is only ever opened in WhatsApp for the user to send.
 class ActionConfirmationCard extends StatefulWidget {
   const ActionConfirmationCard({super.key, required this.action, required this.results});
 
@@ -26,61 +27,20 @@ class ActionConfirmationCard extends StatefulWidget {
 }
 
 class _ActionConfirmationCardState extends State<ActionConfirmationCard> {
-  Future<ContactSearchResult>? _contacts;
-  ContactItem? _contact;
-  bool _autoChosen = false;
-  bool _submitting = false;
-  String? _error;
-  final _manual = TextEditingController();
-
   Future<List<DocumentItem>>? _documents;
   DocumentItem? _document;
   bool _showFullMessage = false;
 
   PendingAction get _action => widget.action;
-  String get _who => _action.contactQuery ?? _action.recipientName ?? 'this contact';
 
   @override
   void initState() {
     super.initState();
-    _prepare();
-  }
-
-  @override
-  void dispose() {
-    _manual.dispose();
-    super.dispose();
-  }
-
-  void _prepare() {
-    if (_action.isOpen && _action.needsRecipient && _action.contactQuery != null) {
-      _contacts = widget.results.contactService.searchContacts(_action.contactQuery!);
-    }
     if (_action.isOpen && _action.isDocumentShare) {
       _documents = widget.results.documentService.list().then(
         (all) => matchDocuments(all, text: _action.documentQuery, limit: 5),
       );
     }
-  }
-
-  void _searchAgain() => setState(() {
-    _contact = null;
-    _autoChosen = false;
-    _contacts = widget.results.contactService.searchContacts(_action.contactQuery ?? '');
-  });
-
-  Future<void> _choose(String address, String? name) async {
-    if (_submitting) return;
-    setState(() {
-      _submitting = true;
-      _error = null;
-    });
-    final error = await widget.results.onChooseRecipient(_action.id, address: address.trim(), name: name);
-    if (!mounted) return;
-    setState(() {
-      _submitting = false;
-      _error = error;
-    });
   }
 
   void _cancel() => widget.results.onCancelAction(_action.id);
@@ -108,13 +68,12 @@ class _ActionConfirmationCardState extends State<ActionConfirmationCard> {
         );
       case PendingActionState.awaiting ||
           PendingActionState.confirming ||
-          PendingActionState.cancelling ||
-          PendingActionState.handingOff:
+          PendingActionState.handingOff ||
+          PendingActionState.cancelling:
         break;
     }
 
     final theme = Theme.of(context);
-    final resolving = action.isOpen && action.needsRecipient;
     return AppCard(
       key: ValueKey('action-${action.id}'),
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
@@ -135,10 +94,62 @@ class _ActionConfirmationCardState extends State<ActionConfirmationCard> {
             ],
           ),
           const SizedBox(height: 10),
-          if (resolving) _recipientStep(context) else ..._details(context),
+          ..._body(context),
         ],
       ),
     );
+  }
+
+  List<Widget> _body(BuildContext context) {
+    final action = _action;
+    final theme = Theme.of(context);
+    if (action.isOpen && action.needsSharedContact) {
+      final query = action.sharedContactQuery ?? '';
+      return [
+        Text('Whose number to share', style: theme.textTheme.labelMedium),
+        const SizedBox(height: 4),
+        ContactAddressPicker(
+          key: ValueKey('shared-${action.id}'),
+          query: query,
+          field: ContactField.phone,
+          results: widget.results,
+          onCancel: _cancel,
+          missingMessage: (c) => "${c.displayName} doesn't have a phone number saved in your contacts.",
+          onPick: (phone, name) => widget.results.onChooseSharedContact(action.id, name: name, phone: phone),
+        ),
+      ];
+    }
+    if (action.isOpen && action.needsRecipient && action.contactQuery != null) {
+      final email = action.recipientField == ContactField.email;
+      return [
+        if (action.isContactShare) ...[
+          Text('Send to', style: theme.textTheme.labelMedium),
+          const SizedBox(height: 4),
+        ],
+        ContactAddressPicker(
+          key: ValueKey('recipient-${action.id}'),
+          query: action.contactQuery!,
+          field: action.recipientField,
+          results: widget.results,
+          onCancel: _cancel,
+          allowManualEmail: email,
+          missingMessage: (c) => email
+              ? '${c.displayName} ke contact me email saved nahi hai. Kis email address par bheju?'
+              : "This contact doesn't have a phone number saved.",
+          onPick: (address, name) => widget.results.onChooseRecipient(action.id, address: address, name: name),
+        ),
+      ];
+    }
+    if (action.isOpen && action.needsRecipient) {
+      return [
+        ManualEmailEntry(
+          prompt: 'Kis email address par bheju?',
+          onCancel: _cancel,
+          onSubmit: (address) => widget.results.onChooseRecipient(action.id, address: address),
+        ),
+      ];
+    }
+    return _details(context);
   }
 
   Widget _outcome(BannerTone tone, IconData icon) => InfoBanner(
@@ -149,173 +160,7 @@ class _ActionConfirmationCardState extends State<ActionConfirmationCard> {
   );
 
   // -------------------------------------------------------------------------------------------
-  // Step 1: find the contact on this phone and pick the address.
-
-  Widget _recipientStep(BuildContext context) {
-    final search = _contacts;
-    if (search == null) return _manualEntry(context, prompt: 'Kis email address par bheju?');
-    return FutureBuilder<ContactSearchResult>(
-      future: search,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done) {
-          return const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: LinearProgressIndicator());
-        }
-        final result = snapshot.data ?? const ContactSearchResult(ContactSearchStatus.failed);
-        switch (result.status) {
-          case ContactSearchStatus.permissionDenied || ContactSearchStatus.permissionBlocked:
-            return ContactsPermissionCard(
-              blocked: result.status == ContactSearchStatus.permissionBlocked,
-              onOpenPermissions: widget.results.onOpenPermissions,
-              onOpenSettings: widget.results.onOpenSettings,
-              onCancel: _cancel,
-              onRetry: _searchAgain,
-            );
-          case ContactSearchStatus.unavailable || ContactSearchStatus.failed:
-            return _notFound(context, "I couldn't read the contacts on this phone.");
-          case ContactSearchStatus.done:
-            break;
-        }
-
-        final matches = result.matches;
-        if (matches.isEmpty) return _notFound(context, 'I couldn\'t find "$_who" in your contacts.');
-        final contact = _contact ?? (matches.length == 1 ? matches.single : null);
-        if (contact == null) {
-          return ContactChoiceList(
-            name: _who,
-            contacts: matches,
-            field: _action.recipientField,
-            onSelected: (c) => setState(() => _contact = c),
-          );
-        }
-        return _addressStep(context, contact);
-      },
-    );
-  }
-
-  Widget _addressStep(BuildContext context, ContactItem contact) {
-    final theme = Theme.of(context);
-    final email = _action.recipientField == ContactField.email;
-    final addresses = email ? contact.emails : contact.phoneNumbers;
-    if (addresses.isEmpty) {
-      return email
-          ? _manualEntry(
-              context,
-              prompt: '${contact.displayName} ke contact me email saved nahi hai. Kis email address par bheju?',
-              name: contact.displayName,
-            )
-          : _cancelOnly(context, "This contact doesn't have a phone number saved.");
-    }
-    if (addresses.length == 1) {
-      // One contact with one address: nothing to choose. The user still confirms it next.
-      if (!_autoChosen) {
-        _autoChosen = true;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _choose(addresses.single, contact.displayName);
-        });
-      }
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (_error == null) const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: LinearProgressIndicator()),
-          ..._errorAndCancel(context),
-        ],
-      );
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          email ? 'Which email address for ${contact.displayName}?' : 'Which number for ${contact.displayName}?',
-          style: theme.textTheme.bodyMedium,
-        ),
-        for (final address in addresses)
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            leading: Icon(email ? Icons.email_outlined : Icons.phone_rounded),
-            title: Text(address),
-            enabled: !_submitting,
-            onTap: () => _choose(address, contact.displayName),
-          ),
-        ..._errorAndCancel(context),
-      ],
-    );
-  }
-
-  Widget _notFound(BuildContext context, String message) {
-    if (_action.recipientField == ContactField.email) {
-      return _manualEntry(context, prompt: '$message Kis email address par bheju?');
-    }
-    return _cancelOnly(context, message);
-  }
-
-  Widget _cancelOnly(BuildContext context, String message) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      Text(message, style: Theme.of(context).textTheme.bodyMedium),
-      const SizedBox(height: 8),
-      Align(
-        alignment: Alignment.centerRight,
-        child: OutlinedButton(onPressed: _cancel, child: const Text('Cancel')),
-      ),
-    ],
-  );
-
-  /// Asks for an email address. Exactly what the user types is used (the server checks it); it
-  /// is then shown for confirmation like any other recipient.
-  Widget _manualEntry(BuildContext context, {required String prompt, String? name}) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(prompt, style: Theme.of(context).textTheme.bodyMedium),
-        const SizedBox(height: 8),
-        TextField(
-          controller: _manual,
-          enabled: !_submitting,
-          keyboardType: TextInputType.emailAddress,
-          autocorrect: false,
-          decoration: const InputDecoration(labelText: 'Email address', prefixIcon: Icon(Icons.alternate_email)),
-          onSubmitted: (value) => value.trim().isEmpty ? null : _choose(value, name ?? _action.contactQuery),
-        ),
-        const SizedBox(height: 8),
-        if (_error != null)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Text(_error!, style: TextStyle(color: AppColors.danger)),
-          ),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            OutlinedButton(onPressed: _submitting ? null : _cancel, child: const Text('Cancel')),
-            const SizedBox(width: 8),
-            ListenableBuilder(
-              listenable: _manual,
-              builder: (context, _) => FilledButton(
-                onPressed: _submitting || _manual.text.trim().isEmpty
-                    ? null
-                    : () => _choose(_manual.text, name ?? _action.contactQuery),
-                child: const Text('Use this address'),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  List<Widget> _errorAndCancel(BuildContext context) => [
-    if (_error != null) ...[
-      Text(_error!, style: TextStyle(color: AppColors.danger)),
-      const SizedBox(height: 6),
-    ],
-    Align(
-      alignment: Alignment.centerRight,
-      child: OutlinedButton(onPressed: _submitting ? null : _cancel, child: const Text('Cancel')),
-    ),
-  ];
-
-  // -------------------------------------------------------------------------------------------
-  // Step 2: exactly what will be sent, then Cancel / Confirm.
+  // Exactly what will be sent, then Cancel / Confirm.
 
   List<Widget> _details(BuildContext context) {
     final theme = Theme.of(context);
@@ -338,11 +183,7 @@ class _ActionConfirmationCardState extends State<ActionConfirmationCard> {
         _Field(label: action.isWhatsApp ? 'Information' : 'Data', value: action.dataSummary!, highlight: true),
       if (action.isDocumentShare) _documentField(context),
       if (message != null && message.isNotEmpty) ...[
-        _Field(
-          label: 'Message',
-          value: message,
-          maxLines: long && !_showFullMessage ? 8 : null,
-        ),
+        _Field(label: 'Message', value: message, maxLines: long && !_showFullMessage ? 8 : null),
         if (long)
           Align(
             alignment: Alignment.centerLeft,
@@ -430,6 +271,279 @@ class _ActionConfirmationCardState extends State<ActionConfirmationCard> {
           ],
         );
       },
+    );
+  }
+}
+
+/// Finds a contact named [query] on this phone and lets the user pick it and one of its phone
+/// numbers or emails. Several contacts or several numbers are always listed for the user to
+/// choose; only a single contact with a single address is taken without asking (the user still
+/// confirms the result). [onPick] receives the picked address and the contact's name, and returns
+/// an error to show, or null on success. Nothing is guessed and nothing else leaves the phone.
+class ContactAddressPicker extends StatefulWidget {
+  const ContactAddressPicker({
+    super.key,
+    required this.query,
+    required this.field,
+    required this.results,
+    required this.onPick,
+    required this.onCancel,
+    required this.missingMessage,
+    this.allowManualEmail = false,
+  });
+
+  final String query;
+
+  /// Pick a phone number, or an email address.
+  final ContactField field;
+  final ChatResultContext results;
+  final Future<String?> Function(String address, String name) onPick;
+  final VoidCallback onCancel;
+
+  /// What to say when the picked contact has no address of [field].
+  final String Function(ContactItem contact) missingMessage;
+
+  /// Lets the user type an email address when the contact has none (or isn't found).
+  final bool allowManualEmail;
+
+  @override
+  State<ContactAddressPicker> createState() => _ContactAddressPickerState();
+}
+
+class _ContactAddressPickerState extends State<ContactAddressPicker> {
+  late Future<ContactSearchResult> _search = _run();
+  ContactItem? _contact;
+  bool _autoPicked = false;
+  bool _submitting = false;
+  String? _error;
+
+  bool get _email => widget.field == ContactField.email;
+
+  Future<ContactSearchResult> _run() => widget.results.contactService.searchContacts(widget.query);
+
+  void _searchAgain() => setState(() {
+    _contact = null;
+    _autoPicked = false;
+    _search = _run();
+  });
+
+  Future<void> _pick(String address, String name) async {
+    if (_submitting) return;
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+    final error = await widget.onPick(address.trim(), name);
+    if (!mounted) return;
+    setState(() {
+      _submitting = false;
+      _error = error;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<ContactSearchResult>(
+      future: _search,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: LinearProgressIndicator());
+        }
+        final result = snapshot.data ?? const ContactSearchResult(ContactSearchStatus.failed);
+        switch (result.status) {
+          case ContactSearchStatus.permissionDenied || ContactSearchStatus.permissionBlocked:
+            return ContactsPermissionCard(
+              blocked: result.status == ContactSearchStatus.permissionBlocked,
+              onOpenPermissions: widget.results.onOpenPermissions,
+              onOpenSettings: widget.results.onOpenSettings,
+              onCancel: widget.onCancel,
+              onRetry: _searchAgain,
+            );
+          case ContactSearchStatus.unavailable || ContactSearchStatus.failed:
+            return _notFound(context, "I couldn't read the contacts on this phone.");
+          case ContactSearchStatus.done:
+            break;
+        }
+
+        final matches = result.matches;
+        if (matches.isEmpty) return _notFound(context, 'I couldn\'t find "${widget.query}" in your contacts.');
+        final contact = _contact ?? (matches.length == 1 ? matches.single : null);
+        if (contact == null) {
+          return ContactChoiceList(
+            name: widget.query,
+            contacts: matches,
+            field: widget.field,
+            onSelected: (c) => setState(() => _contact = c),
+          );
+        }
+        return _addresses(context, contact);
+      },
+    );
+  }
+
+  Widget _addresses(BuildContext context, ContactItem contact) {
+    final theme = Theme.of(context);
+    final addresses = _email ? contact.emails : contact.phoneNumbers;
+    if (addresses.isEmpty) {
+      return widget.allowManualEmail
+          ? ManualEmailEntry(
+              prompt: widget.missingMessage(contact),
+              onCancel: widget.onCancel,
+              onSubmit: (address) => widget.onPick(address, contact.displayName),
+            )
+          : _cancelOnly(context, widget.missingMessage(contact));
+    }
+    if (addresses.length == 1) {
+      // One contact with one address: nothing to choose. The user still confirms it next.
+      if (!_autoPicked) {
+        _autoPicked = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _pick(addresses.single, contact.displayName);
+        });
+      }
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (_error == null) const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: LinearProgressIndicator()),
+          ..._errorAndCancel(context),
+        ],
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          _email ? 'Which email address for ${contact.displayName}?' : 'Select phone number for ${contact.displayName}',
+          style: theme.textTheme.bodyMedium,
+        ),
+        for (final (i, address) in addresses.indexed)
+          ListTile(
+            key: ValueKey('address-${contact.id}-$i'),
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            leading: Icon(_email ? Icons.email_outlined : Icons.phone_rounded),
+            title: Text(address),
+            subtitle: _email || contact.phoneLabel(i) == null ? null : Text(contact.phoneLabel(i)!),
+            enabled: !_submitting,
+            onTap: () => _pick(address, contact.displayName),
+          ),
+        ..._errorAndCancel(context),
+      ],
+    );
+  }
+
+  Widget _notFound(BuildContext context, String message) {
+    if (widget.allowManualEmail) {
+      return ManualEmailEntry(
+        prompt: '$message Kis email address par bheju?',
+        onCancel: widget.onCancel,
+        onSubmit: (address) => widget.onPick(address, widget.query),
+      );
+    }
+    return _cancelOnly(context, message);
+  }
+
+  Widget _cancelOnly(BuildContext context, String message) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Text(message, style: Theme.of(context).textTheme.bodyMedium),
+      const SizedBox(height: 8),
+      Align(
+        alignment: Alignment.centerRight,
+        child: OutlinedButton(onPressed: widget.onCancel, child: const Text('Cancel')),
+      ),
+    ],
+  );
+
+  List<Widget> _errorAndCancel(BuildContext context) => [
+    if (_error != null) ...[
+      Text(_error!, style: TextStyle(color: AppColors.danger)),
+      const SizedBox(height: 6),
+    ],
+    Align(
+      alignment: Alignment.centerRight,
+      child: OutlinedButton(onPressed: _submitting ? null : widget.onCancel, child: const Text('Cancel')),
+    ),
+  ];
+}
+
+/// Asks for an email address. Exactly what the user types is used (the server checks it); it is
+/// then shown for confirmation like any other recipient.
+class ManualEmailEntry extends StatefulWidget {
+  const ManualEmailEntry({super.key, required this.prompt, required this.onSubmit, required this.onCancel});
+
+  final String prompt;
+
+  /// Returns an error to show, or null on success.
+  final Future<String?> Function(String address) onSubmit;
+  final VoidCallback onCancel;
+
+  @override
+  State<ManualEmailEntry> createState() => _ManualEmailEntryState();
+}
+
+class _ManualEmailEntryState extends State<ManualEmailEntry> {
+  final _controller = TextEditingController();
+  bool _submitting = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final address = _controller.text.trim();
+    if (address.isEmpty || _submitting) return;
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+    final error = await widget.onSubmit(address);
+    if (!mounted) return;
+    setState(() {
+      _submitting = false;
+      _error = error;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(widget.prompt, style: Theme.of(context).textTheme.bodyMedium),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _controller,
+          enabled: !_submitting,
+          keyboardType: TextInputType.emailAddress,
+          autocorrect: false,
+          decoration: const InputDecoration(labelText: 'Email address', prefixIcon: Icon(Icons.alternate_email)),
+          onSubmitted: (_) => _submit(),
+        ),
+        const SizedBox(height: 8),
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(_error!, style: TextStyle(color: AppColors.danger)),
+          ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            OutlinedButton(onPressed: _submitting ? null : widget.onCancel, child: const Text('Cancel')),
+            const SizedBox(width: 8),
+            ListenableBuilder(
+              listenable: _controller,
+              builder: (context, _) => FilledButton(
+                onPressed: _submitting || _controller.text.trim().isEmpty ? null : _submit,
+                child: const Text('Use this address'),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }
