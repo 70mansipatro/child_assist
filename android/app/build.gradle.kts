@@ -35,6 +35,8 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // On-device checks of the wake word (src/androidTest): real model, native library, microphone.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -96,4 +98,7 @@ dependencies {
     // The wake word's foreground-service notification.
     implementation("androidx.core:core-ktx:1.16.0")
     implementation(files(sherpaOnnxAar))
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:rules:1.6.1")
 }

@@ -96,6 +96,7 @@ class WakeWordService extends ChangeNotifier {
   bool _lockScreenAnswers = false;
   bool _notificationsBlocked = false;
   bool _fullScreenBlocked = false;
+  bool _backgroundOpenBlocked = false;
 
   bool _pendingActivation = false;
   Timer? _activationTimer;
@@ -273,6 +274,13 @@ class WakeWordService extends ChangeNotifier {
   Future<bool> openAppSettings() => _permissions.openSettings();
 
   Future<bool> openFullScreenSettings() => _platform.openFullScreenIntentSettings();
+
+  /// "Display over other apps", so the wake phrase can open Child Assist while another app is used.
+  Future<bool> openBackgroundOpenSettings() => _platform.openBackgroundOpenSettings();
+
+  /// Without "Display over other apps", a wake phrase heard while another app is on screen shows a
+  /// notification to tap instead of opening Child Assist by itself.
+  bool get backgroundOpenBlocked => _backgroundOpenBlocked;
 
   // ---------------------------------------------------------------------------------------------
   // Tap-to-talk
@@ -576,6 +584,7 @@ class WakeWordService extends ChangeNotifier {
     final notifications = await _permissions.notificationStatus();
     _notificationsBlocked = !notifications.isUsable && notifications != PermissionState.unavailable;
     _fullScreenBlocked = isSupported && !await _platform.canUseFullScreenIntent();
+    _backgroundOpenBlocked = isSupported && !await _platform.canOpenFromBackground();
     _notify();
   }
 
@@ -682,8 +691,25 @@ class WakeWordService extends ChangeNotifier {
     }
   }
 
+  WakeWordState? _loggedState;
+
   void _notify() {
-    if (!_disposed) notifyListeners();
+    if (_disposed) return;
+    if (state != _loggedState) {
+      _loggedState = state;
+      _log(switch (state) {
+        WakeWordState.disabled => 'stopped',
+        WakeWordState.starting => 'service starting',
+        WakeWordState.listeningForWakeWord => 'listening',
+        WakeWordState.wakeWordDetected => 'wake phrase detected',
+        WakeWordState.listeningForCommand => 'question listening',
+        WakeWordState.processing => 'processing',
+        WakeWordState.speaking => 'speaking',
+        WakeWordState.paused => 'paused (${_issue?.name})',
+        WakeWordState.error => 'error (${_issue?.name})',
+      });
+    }
+    notifyListeners();
   }
 
   @override
@@ -697,4 +723,9 @@ class WakeWordService extends ChangeNotifier {
     unawaited(_events?.cancel());
     super.dispose();
   }
+}
+
+/// Debug builds only. Fixed state names and issue kinds; never what the user said, tokens or ids.
+void _log(String event) {
+  if (kDebugMode) debugPrint('[WakeWord] $event');
 }

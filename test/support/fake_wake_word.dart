@@ -112,6 +112,18 @@ class FakeWakeWordPlatform implements WakeWordPlatform {
   @override
   Future<bool> canUseFullScreenIntent() async => fullScreenAllowed;
 
+  /// "Display over other apps" granted.
+  bool backgroundOpenAllowed = true;
+
+  @override
+  Future<bool> canOpenFromBackground() async => backgroundOpenAllowed;
+
+  @override
+  Future<bool> openBackgroundOpenSettings() async {
+    calls.add('openBackgroundOpenSettings');
+    return true;
+  }
+
   @override
   Future<bool> openFullScreenIntentSettings() async {
     calls.add('openFullScreenIntentSettings');

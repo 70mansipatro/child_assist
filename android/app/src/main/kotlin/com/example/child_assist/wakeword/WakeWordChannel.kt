@@ -60,6 +60,11 @@ class WakeWordChannel(private val activity: Activity) {
                 "requestUnlock" -> requestUnlock(result)
                 "canUseFullScreenIntent" -> result.success(canUseFullScreenIntent())
                 "openFullScreenIntentSettings" -> result.success(openFullScreenIntentSettings())
+                // Optional: lets the wake word open Child Assist while another app is in use.
+                "canOpenFromBackground" -> result.success(
+                    Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || Settings.canDrawOverlays(context),
+                )
+                "openBackgroundOpenSettings" -> result.success(openSettings(Settings.ACTION_MANAGE_OVERLAY_PERMISSION))
                 else -> result.notImplemented()
             }
         }
@@ -149,14 +154,15 @@ class WakeWordChannel(private val activity: Activity) {
 
     private fun openFullScreenIntentSettings(): Boolean {
         if (Build.VERSION.SDK_INT < 34) return false
-        return try {
-            activity.startActivity(
-                Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:${context.packageName}")),
-            )
-            true
-        } catch (e: ActivityNotFoundException) {
-            false
-        }
+        return openSettings(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT)
+    }
+
+    /** This app's page for one special permission in the phone's Settings. */
+    private fun openSettings(action: String): Boolean = try {
+        activity.startActivity(Intent(action, Uri.parse("package:${context.packageName}")))
+        true
+    } catch (e: ActivityNotFoundException) {
+        false
     }
 
     /** MainActivity was opened by the wake phrase (see [WakeWordService.openApp]). */

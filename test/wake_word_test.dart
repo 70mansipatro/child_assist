@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -134,6 +136,9 @@ void main() {
       expect(stripWakePhrase('hey child, hey child, what color dress is in that photo'), 'what color dress is in that photo');
       expect(stripWakePhrase('Hay child. Find my math notes'), 'Find my math notes');
       expect(stripWakePhrase('Child, what is in this picture?'), 'what is in this picture?');
+      expect(stripWakePhrase('Hey Child, what is my name?'), 'what is my name?');
+      expect(stripWakePhrase('  HI   CHILD ,  where did I travel today?'), 'where did I travel today?');
+      expect(stripWakePhrase('hey child... show me my photos'), 'show me my photos');
     });
 
     test('only the wake phrase is an empty question', () {
@@ -149,6 +154,10 @@ void main() {
         'What is the child wearing in the photo?',
         'Hey, what time is it?',
         'Highchair reviews',
+        'My child is here',
+        'Where is my child?',
+        'Child Assist, open my documents',
+        'Hey children, dinner is ready',
       ]) {
         expect(stripWakePhrase(heard), heard);
       }
@@ -664,6 +673,146 @@ void main() {
       await frames(tester);
       expect(backend.chatRequests.single['message'], 'where did I go today');
       expect(phone.listening, isTrue);
+    });
+
+    // -- Second pass: phrases, app states, recovery, logs ------------------------------------
+
+    testWidgets('"Hi Child, where did I travel today?" works like Hey Child and sends only the question', (tester) async {
+      await startApp(tester);
+      await switchOn(tester);
+      expect(phone.sayWakePhrase(keyword: 'HI_CHILD'), isTrue);
+      await frames(tester);
+      expect(find.text('Listening for your question...'), findsOneWidget, reason: 'the voice panel shows the state');
+
+      voice.finish('Hi Child, where did I travel today?');
+      await frames(tester);
+      expect(backend.chatRequests.single['message'], 'where did I travel today?');
+
+      await sayHeyChild(tester);
+      voice.finish('Hey Child, what is my name?');
+      await frames(tester);
+      expect(backend.chatRequests.last['message'], 'what is my name?');
+      expect(find.text('Listening for your question...'), findsNothing);
+      expect(find.text('Listening for “Hey Child”'), findsOneWidget, reason: 'Chat shows it is waiting again');
+    });
+
+    testWidgets('the panel follows the question: listening, processing, answer', (tester) async {
+      await startApp(tester);
+      await switchOn(tester);
+      tts.repliesEnabled = true;
+      await sayHeyChild(tester);
+      expect(find.text('Listening for your question...'), findsOneWidget);
+      final answer = backend.chatPending = Completer<void>();
+      voice.finish('what time is it');
+      await frames(tester);
+      expect(find.text('Processing your question...'), findsOneWidget);
+      answer.complete();
+      await frames(tester);
+      expect(find.text('Here is your answer...'), findsOneWidget);
+      tts.finishSpeaking();
+      await tester.pump(const Duration(milliseconds: 800));
+      await frames(tester);
+      expect(find.text('Here is your answer...'), findsNothing);
+    });
+
+    testWidgets('app in the background: the question starts once Child Assist is on screen', (tester) async {
+      await startApp(tester);
+      await switchOn(tester);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await frames(tester);
+
+      await sayHeyChild(tester);
+      expect(voice.calls, isEmpty, reason: 'nothing is heard until the app is on screen');
+      expect(wake().state, WakeWordState.wakeWordDetected);
+
+      // The phone opens Child Assist (overlay start or full-screen notification).
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await frames(tester);
+      expect(voice.calls, ['listen']);
+      voice.finish('where did I go today');
+      await frames(tester);
+      expect(backend.chatRequests.single['message'], 'where did I go today');
+    });
+
+    testWidgets('screen off and the app never shown: the wake phrase expires and listening resumes', (tester) async {
+      await startApp(tester);
+      await switchOn(tester);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await sayHeyChild(tester);
+      await tester.pump(const Duration(seconds: 16));
+      await frames(tester);
+
+      expect(wake().state, WakeWordState.listeningForWakeWord);
+      expect(phone.listening, isTrue);
+      expect(voice.calls, isEmpty);
+      expect(backend.chatRequests, isEmpty);
+    });
+
+    testWidgets('screen off and locked: Child Assist turns the screen on, asks to unlock, then answers', (tester) async {
+      await startApp(tester);
+      await switchOn(tester);
+      phone.lock = const DeviceLockState(locked: true, secure: true);
+      await sayHeyChild(tester);
+
+      expect(phone.calls, contains('requestUnlock'));
+      expect(phone.screenKeptOn, isTrue, reason: 'the screen stays on for the question');
+      expect(voice.calls, ['listen'], reason: 'unlocked, so the question is heard');
+      expect(phone.showingOverLockScreen, isFalse, reason: 'nothing shows above the lock screen by default');
+      voice.finish('what is my name');
+      await frames(tester);
+      expect(backend.chatRequests.single['message'], 'what is my name');
+      expect(phone.screenKeptOn, isFalse);
+    });
+
+    testWidgets('an error can be retried from Settings and listening comes back', (tester) async {
+      await startApp(tester);
+      await switchOn(tester);
+      phone.report(const NativeWakeStatus(enabled: true, owner: 'u1', issue: 'engine'));
+      await frames(tester);
+      expect(wake().state, WakeWordState.error);
+
+      await openVoiceAssistant(tester);
+      expect(await seen(tester, find.text("Wake Word couldn't start on this phone.")), findsOneWidget);
+      await tapVisible(tester, find.widgetWithText(FilledButton, 'Try again'));
+      await frames(tester);
+      expect(wake().state, WakeWordState.listeningForWakeWord);
+      expect(phone.calls.where((c) => c == 'start u1'), hasLength(2));
+      expect(find.text('Hey Child is listening for the wake phrase.'), findsOneWidget);
+    });
+
+    testWidgets('"Turn off" in the notification is saved: Wake Word stays off after a restart', (tester) async {
+      await startApp(tester);
+      await switchOn(tester);
+      expect(await const FlutterSecureStorage().read(key: 'wake_word_enabled_u1'), 'true');
+      phone.report(const NativeWakeStatus());
+      await frames(tester);
+      expect(await const FlutterSecureStorage().read(key: 'wake_word_enabled_u1'), isNull);
+    });
+
+    testWidgets('logs never contain what was said, the session token or the account', (tester) async {
+      final logs = <String>[];
+      final original = debugPrint;
+      debugPrint = (String? message, {int? wrapWidth}) => logs.add(message ?? '');
+
+      await startApp(tester);
+      await switchOn(tester);
+      await sayHeyChild(tester);
+      voice.finish('Hey Child, what is my secret plan');
+      await frames(tester);
+
+      debugPrint = original;
+      final wakeLogs = logs.where((l) => l.contains('[WakeWord]')).toList();
+      expect(wakeLogs, containsAll(['[WakeWord] listening', '[WakeWord] wake phrase detected', '[WakeWord] question listening']));
+      final all = logs.join('\n');
+      expect(all, isNot(contains('secret plan')), reason: 'debug transcripts are only logged by tap-to-talk in debug, never by the wake word');
+      expect(all, isNot(contains(FakeBackend.tokenFor('u1'))));
+      expect(wakeLogs.join('\n'), isNot(contains('u1')));
     });
   });
 }

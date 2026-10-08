@@ -124,6 +124,16 @@ class _VoiceAssistantScreenState extends State<VoiceAssistantScreen> {
                             title: 'Wake phrase',
                             subtitle: wakePhrases.map((p) => '“$p”').join(' or '),
                           ),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(72, 0, 16, 12),
+                            child: Wrap(
+                              spacing: 8,
+                              children: [
+                                for (final phrase in wakePhrases)
+                                  Chip(avatar: const Icon(Icons.mic_none_rounded, size: 18), label: Text(phrase)),
+                              ],
+                            ),
+                          ),
                           divider,
                           MenuTile(
                             icon: Icons.mic_rounded,
@@ -266,6 +276,17 @@ class _VoiceAssistantScreenState extends State<VoiceAssistantScreen> {
           ),
           actions: [
             FilledButton(onPressed: () => unawaited(_wake.openFullScreenSettings()), child: const Text('Allow')),
+          ],
+        ),
+      if (_wake.enabled && _wake.backgroundOpenBlocked)
+        InfoBanner(
+          icon: Icons.open_in_new_rounded,
+          message: const Text(
+            'Optional: allow "Display over other apps" so Hey Child can open Child Assist by itself while you '
+            'use another app. Without it, tap the notification that appears.',
+          ),
+          actions: [
+            FilledButton(onPressed: () => unawaited(_wake.openBackgroundOpenSettings()), child: const Text('Allow')),
           ],
         ),
     ];

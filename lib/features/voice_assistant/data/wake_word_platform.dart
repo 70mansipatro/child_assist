@@ -6,13 +6,16 @@ import 'package:flutter/services.dart';
 /// were measured. The phone clamps both values to a safe range.
 @immutable
 class WakeWordTuning {
-  const WakeWordTuning({this.threshold = 0.20, this.boost = 1.0});
+  const WakeWordTuning({this.threshold = 0.20, this.boost = 1.0, this.trailingBlanks = 4});
 
   /// Stricter (fewer false activations, more missed phrases) as it goes up.
   final double threshold;
   final double boost;
 
-  Map<String, double> toMap() => {'threshold': threshold, 'boost': boost};
+  /// Silence after "child" before it counts (40 ms each): rejects "Hey children".
+  final int trailingBlanks;
+
+  Map<String, num> toMap() => {'threshold': threshold, 'boost': boost, 'trailingBlanks': trailingBlanks};
 }
 
 /// What the phone's listening service reports.
@@ -133,6 +136,11 @@ abstract class WakeWordPlatform {
   /// Android 14+ can withhold the full-screen notification that opens the app on a locked phone.
   Future<bool> canUseFullScreenIntent();
   Future<bool> openFullScreenIntentSettings();
+
+  /// Optional "Display over other apps": lets the wake phrase open Child Assist while another app
+  /// is in use (otherwise a heads-up notification is shown).
+  Future<bool> canOpenFromBackground();
+  Future<bool> openBackgroundOpenSettings();
 }
 
 /// The Android implementation, over "child_assist/wake_word". Never throws: a missing or failing
@@ -227,4 +235,10 @@ class MethodChannelWakeWordPlatform implements WakeWordPlatform {
 
   @override
   Future<bool> openFullScreenIntentSettings() async => await _call<bool>('openFullScreenIntentSettings') ?? false;
+
+  @override
+  Future<bool> canOpenFromBackground() async => await _call<bool>('canOpenFromBackground') ?? true;
+
+  @override
+  Future<bool> openBackgroundOpenSettings() async => await _call<bool>('openBackgroundOpenSettings') ?? false;
 }

@@ -25,6 +25,10 @@
     <!-- After "Hey Child", opens Child Assist over a locked or sleeping screen for the question
          (a full-screen notification). Android 14+ may require the user to allow it in Settings. -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
+    <!-- Optional, granted by the user in Settings ("Display over other apps"): lets "Hey Child" open
+         Child Assist while another app is in use (Android blocks background activity starts
+         otherwise; a heads-up notification is shown instead). Never used to draw over other apps. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
     <uses-permission android:name="android.permission.CAMERA"/>
     <!-- Photos: Android 13+ uses READ_MEDIA_IMAGES (plus partial "selected photos" access on 14+);
          Android 12 and below fall back to READ_EXTERNAL_STORAGE. -->
@@ -81,7 +85,7 @@
         <service
             android:name=".wakeword.WakeWordService"
             android:exported="false"
-            android:foregroundServiceType="microphone" />
+            android:foregroundServiceType="microphone|shortService" />
         <!-- Push notifications (Firebase Cloud Messaging). Pushes that arrive while the app is in
              the background are shown by Android with this icon on this channel unless they name
              one; the app creates the channels (lib/core/notifications/notification_channels.dart). -->

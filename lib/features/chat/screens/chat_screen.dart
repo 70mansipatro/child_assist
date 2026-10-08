@@ -24,6 +24,7 @@ import '../widgets/chat_input.dart';
 import '../widgets/chat_message_bubble.dart';
 import '../widgets/tool_result_cards.dart';
 import '../widgets/typing_indicator.dart';
+import '../widgets/wake_word_panel.dart';
 import 'chat_history_screen.dart';
 
 /// Chat with Child Assist. All AI work happens on the server; this screen only sends text,
@@ -290,10 +291,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     'Child Assist',
                     style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700, color: Colors.white),
                   ),
-                  Text(
-                    'Your personal assistant',
-                    style: theme.textTheme.bodySmall?.copyWith(color: Colors.white.withValues(alpha: 0.8)),
-                  ),
+                  _Subtitle(wakeWord: widget.wakeWordService),
                 ],
               ),
             ),
@@ -319,10 +317,11 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
       ),
       body: ListenableBuilder(
-        listenable: Listenable.merge([_session, _voice]),
+        listenable: Listenable.merge([_session, _voice, ?widget.wakeWordService]),
         builder: (context, _) => Column(
           children: [
             if (_lockedSession) _buildLockedBanner(),
+            if (_wakeInteraction case final state?) WakeWordPanel(state: state, heard: _voice.transcript),
             Expanded(child: _buildBody(context)),
             if (_session.error != null) _buildError(),
             ?_buildVoiceStatus(context),
@@ -341,6 +340,12 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   bool get _lockedSession => widget.wakeWordService?.lockedSession ?? false;
+
+  /// The hands-free question in progress, if any.
+  WakeWordState? get _wakeInteraction {
+    final state = widget.wakeWordService?.state;
+    return state != null && WakeWordStateMachine.isInteraction(state) ? state : null;
+  }
 
   /// Shown while Child Assist answers above the lock screen.
   Widget _buildLockedBanner() {
@@ -512,3 +517,25 @@ class _Welcome extends StatelessWidget {
   }
 }
 
+
+/// Under the title: "Listening for “Hey Child”" while the wake word really listens.
+class _Subtitle extends StatelessWidget {
+  const _Subtitle({required this.wakeWord});
+
+  final WakeWordService? wakeWord;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white.withValues(alpha: 0.8));
+    final wake = wakeWord;
+    if (wake == null) return Text('Your personal assistant', style: style);
+    return ListenableBuilder(
+      listenable: wake,
+      builder: (context, _) => Text(
+        wake.isListening ? 'Listening for “Hey Child”' : 'Your personal assistant',
+        style: style,
+        overflow: TextOverflow.ellipsis,
+      ),
+    );
+  }
+}

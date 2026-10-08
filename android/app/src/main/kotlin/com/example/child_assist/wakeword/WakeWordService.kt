@@ -15,6 +15,8 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.Settings
+import android.media.ToneGenerator
 import android.util.Log
 import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationCompat
@@ -51,7 +53,7 @@ class WakeWordService : Service() {
     private var inForeground = false
 
     val suspendedBy: List<String> get() = suspensions.toList()
-    val isListening: Boolean get() = detector?.isRunning == true && !silenced
+    val isListening: Boolean get() = detector?.isRecording == true && !silenced
     val isSilenced: Boolean get() = silenced
 
     // ---------------------------------------------------------------------------------------------
@@ -61,6 +63,8 @@ class WakeWordService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        WakeLog.init(this)
+        WakeLog.d("service starting")
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         createChannels(this)
         WakeWordBridge.service = this
@@ -78,18 +82,23 @@ class WakeWordService : Service() {
             return START_NOT_STICKY
         }
         // A null intent: Android restarted the service after stopping it (START_STICKY).
+        // Started with startForegroundService(), so Android requires startForeground() even when it
+        // is only going to stop (otherwise it crashes the app); a short-service notification does that.
         if (!WakeWordBridge.isEnabled(this)) {
+            enterForegroundToStop()
             shutDown()
             return START_NOT_STICKY
         }
-        if (!enterForeground()) return START_NOT_STICKY
+        WakeLog.d("microphone permission: ${if (hasMicrophonePermission()) "granted" else "denied"}")
         if (!hasMicrophonePermission()) {
             log("microphone permission missing; stopping")
+            enterForegroundToStop()
             WakeWordBridge.clear(this)
             WakeWordBridge.issue = ISSUE_PERMISSION
             shutDown()
             return START_NOT_STICKY
         }
+        if (!enterForeground()) return START_NOT_STICKY
         val wanted = WakeWordBridge.tuning(this)
         if (wanted != tuning) {
             detector?.release()
@@ -127,15 +136,35 @@ class WakeWordService : Service() {
             // Android 11+ does not let a microphone service start while the app is in the
             // background (e.g. Android restarting it after the app was closed). It starts again
             // the next time the app is opened. Never pretend it is listening.
-            Log.w(TAG, "could not start in the foreground: ${e.javaClass.simpleName}")
+            WakeLog.w("could not start in the foreground: ${e.javaClass.simpleName}")
             WakeWordBridge.issue = ISSUE_START_BLOCKED
+            enterForegroundToStop()
             shutDown()
             false
         }
     }
 
+    /**
+     * Satisfies Android's startForeground() requirement for a start that ends at once (switched off,
+     * no permission, or the microphone type refused). Never opens the microphone.
+     */
+    private fun enterForegroundToStop() {
+        try {
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                buildNotification(),
+                if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE else 0,
+            )
+            inForeground = true
+        } catch (e: Exception) {
+            WakeLog.w("could not enter the foreground to stop: ${e.javaClass.simpleName}")
+        }
+    }
+
     /** Stops listening and the service. What the user switched on is kept unless cleared first. */
     fun shutDown() {
+        WakeLog.d("stopped")
         main.removeCallbacksAndMessages(null)
         detector?.release()
         detector = null
@@ -156,12 +185,16 @@ class WakeWordService : Service() {
             main.removeCallbacks(interactionWatchdog)
             main.postDelayed(interactionWatchdog, INTERACTION_TIMEOUT_MS)
         }
-        if (suspensions.add(reason)) apply()
+        if (suspensions.add(reason)) {
+            WakeLog.d("paused: $reason")
+            apply()
+        }
     }
 
     fun resume(reason: String) {
         if (reason == REASON_INTERACTION) main.removeCallbacks(interactionWatchdog)
         if (suspensions.remove(reason)) {
+            if (suspensions.isEmpty()) WakeLog.d("resumed")
             // Freshly allowed again: retry a microphone that failed earlier.
             failures = 0
             apply()
@@ -176,7 +209,7 @@ class WakeWordService : Service() {
     /** Opens or closes the microphone to match the current reasons, and updates the notification. */
     private fun apply() {
         if (suspensions.isEmpty()) {
-            val current = detector ?: WakeWordDetector(this, tuning, ::onDetected, ::onFailure).also { detector = it }
+            val current = detector ?: WakeWordDetector(this, tuning, ::onDetected, ::onFailure) { main.post { refresh() } }.also { detector = it }
             current.start()
         } else {
             detector?.stop()
@@ -204,9 +237,10 @@ class WakeWordService : Service() {
         if (now - lastDetection < DEBOUNCE_MS || suspensions.isNotEmpty() || detector?.isRunning != true) return
         lastDetection = now
         failures = 0
-        log("wake phrase heard")
+        WakeLog.d("wake phrase detected")
         // Free the microphone at once so the question can be heard.
         suspend(REASON_INTERACTION)
+        beep()
         if (WakeWordBridge.events != null) WakeWordBridge.emitDetected(keyword) else WakeWordBridge.markActivation()
         if (!WakeWordBridge.activityVisible) openApp()
     }
@@ -223,16 +257,24 @@ class WakeWordService : Service() {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
         if (WakeWordBridge.events == null) WakeWordBridge.markActivation()
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            startActivity(intent)
-            return
+        // With "Display over other apps" (optional; the user allows it in Settings) Android lets the
+        // app open its screen from the background, so a question works hands-free while another app
+        // is in use. Without it, the full-screen notification below does it.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || Settings.canDrawOverlays(this)) {
+            try {
+                startActivity(intent)
+                WakeLog.d("opened the app")
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+            } catch (e: RuntimeException) {
+                WakeLog.w("could not open the app: ${e.javaClass.simpleName}")
+            }
         }
         val open = PendingIntent.getActivity(this, 1, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val notification = NotificationCompat.Builder(this, ACTIVATION_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_child_assist)
             .setColor(ContextCompat.getColor(this, R.color.notification_color))
-            .setContentTitle("Child Assist is listening")
-            .setContentText("Ask your question.")
+            .setContentTitle("Wake word detected")
+            .setContentText("Child Assist is listening for your question.")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setFullScreenIntent(open, true)
             .setContentIntent(open)
@@ -240,6 +282,17 @@ class WakeWordService : Service() {
             .setTimeoutAfter(INTERACTION_TIMEOUT_MS)
             .build()
         NotificationManagerCompat.from(this).notifySafely(ACTIVATION_NOTIFICATION_ID, notification)
+    }
+
+    /** A short tone: the question can be asked now. Best effort (no tone on silent mode). */
+    private fun beep() {
+        try {
+            val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 60)
+            tone.startTone(ToneGenerator.TONE_PROP_ACK, 150)
+            main.postDelayed({ tone.release() }, 400)
+        } catch (e: RuntimeException) {
+            // No tone available.
+        }
     }
 
     private fun onFailure(failure: WakeWordDetector.Failure) {
@@ -345,7 +398,7 @@ class WakeWordService : Service() {
             REASON_INTERACTION in suspensions -> "Listening to your question."
             REASON_SPEAKING in suspensions -> "Child Assist is answering."
             suspensions.isNotEmpty() -> "Paused while you talk to Child Assist."
-            else -> "Say “Hey Child”. Listening happens on this phone; nothing is recorded or sent."
+            else -> "Listening for “Hey Child” or “Hi Child”"
         }
         val open = PendingIntent.getActivity(
             this,
@@ -427,7 +480,7 @@ class WakeWordService : Service() {
         }
 
         private fun log(message: String) {
-            Log.i(TAG, message)
+            WakeLog.d(message)
         }
     }
 }
