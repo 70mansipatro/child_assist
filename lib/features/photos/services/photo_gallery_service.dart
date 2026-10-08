@@ -30,6 +30,14 @@ abstract class PhotoLibrary {
   /// The photo's metadata including name, type and size, or null if it no longer exists.
   Future<PhotoItem?> details(String id);
 
+  /// The GPS position stored in the photo itself, or null when it has none (or the OS hides it).
+  /// Never guessed: a missing or 0,0 position means "unknown". May throw.
+  Future<PhotoPosition?> location(String id);
+
+  /// The platform's private reference to the photo (an Android content URI), used only on this
+  /// device to hand the photo to WhatsApp or the share sheet. Never sent anywhere. May throw.
+  Future<String?> shareReference(String id);
+
   /// Lets the user change a "selected photos only" grant where the OS has a picker for it.
   /// Returns false if this platform has none.
   Future<bool> changeLimitedSelection();
@@ -91,6 +99,22 @@ class DevicePhotoLibrary implements PhotoLibrary {
       mimeType: asset.mimeType ?? await asset.mimeTypeAsync,
       fileSize: await asset.fileSize,
     );
+  }
+
+  @override
+  Future<PhotoPosition?> location(String id) async {
+    final asset = await _asset(id);
+    if (asset == null) return null;
+    // Android 10+ hides photo GPS unless ACCESS_MEDIA_LOCATION is granted; the plugin then fails
+    // or reports 0,0. Both mean "no GPS", never a made-up position.
+    final latLng = await asset.latlngAsync();
+    return PhotoPosition.tryCreate(latLng?.latitude, latLng?.longitude);
+  }
+
+  @override
+  Future<String?> shareReference(String id) async {
+    final asset = await _asset(id);
+    return asset?.getMediaUrl();
   }
 
   @override
@@ -202,11 +226,51 @@ class PhotoGalleryService {
     return bytes;
   }
 
+  /// Longest side of the image sent for AI analysis: enough to read signs and see details, far
+  /// smaller (and cheaper) than a camera original.
+  static const analysisSize = 1536;
+
   /// The photo scaled down to at most [previewSize] on its longest side, for the viewer.
-  Future<Uint8List?> preview(PhotoItem photo) {
-    var width = previewSize, height = previewSize;
+  Future<Uint8List?> preview(PhotoItem photo) => _scaled(photo, previewSize);
+
+  /// A JPEG of the photo at most [analysisSize] on its longest side, for the ONE photo the user
+  /// asked the assistant about. Null if it can no longer be read.
+  Future<Uint8List?> analysisImage(PhotoItem photo) => _scaled(photo, analysisSize);
+
+  /// Whether the photo is still on the device (it may have been deleted since it was listed).
+  Future<bool> exists(PhotoItem photo) async {
+    try {
+      return await _library.details(photo.id) != null;
+    } catch (e) {
+      debugPrint('Checking a photo failed: ${e.runtimeType}');
+      return false;
+    }
+  }
+
+  /// The GPS position stored in the photo, or null when it has none. Never logged.
+  Future<PhotoPosition?> location(PhotoItem photo) async {
+    try {
+      return await _library.location(photo.id);
+    } catch (e) {
+      debugPrint('Reading a photo position failed: ${e.runtimeType}');
+      return null;
+    }
+  }
+
+  /// The private reference used to share [photo] from this device, or null if it is gone.
+  Future<String?> shareReference(PhotoItem photo) async {
+    try {
+      return await _library.shareReference(photo.id);
+    } catch (e) {
+      debugPrint('Reading a photo reference failed: ${e.runtimeType}');
+      return null;
+    }
+  }
+
+  Future<Uint8List?> _scaled(PhotoItem photo, int longest) {
+    var width = longest, height = longest;
     if (photo.hasDimensions) {
-      final scale = previewSize / (photo.width > photo.height ? photo.width : photo.height);
+      final scale = longest / (photo.width > photo.height ? photo.width : photo.height);
       if (scale < 1) {
         width = (photo.width * scale).round();
         height = (photo.height * scale).round();

@@ -525,7 +525,7 @@ describe("whatsapp: prepare, confirm and hand off to the phone", () => {
     const confirmed = await action(userA, pending.id, "confirm", { conversationId });
     assert.equal(confirmed.status, 200, confirmed.raw);
     assert.equal(confirmed.json.action.status, "CONFIRMED");
-    assert.deepEqual(confirmed.json.action.handoff, { phone: "9876543210", message: "I will be late today.", documentQuery: null, documentId: null });
+    assert.deepEqual(confirmed.json.action.handoff, { phone: "9876543210", message: "I will be late today.", documentQuery: null, documentId: null, photoId: null });
     assert.equal(sentEmails.length, 0, "WhatsApp is never sent by the backend");
     assert.equal((await action(userA, pending.id, "confirm")).status, 409, "confirm works exactly once");
 
@@ -739,7 +739,7 @@ describe("whatsapp: sharing one contact's number with another contact", () => {
 
     const confirmed = await action(userA, pending.id, "confirm", { conversationId });
     assert.equal(confirmed.status, 200, confirmed.raw);
-    assert.deepEqual(confirmed.json.action.handoff, { phone: f.recipientPhone, message: expected, documentQuery: null, documentId: null });
+    assert.deepEqual(confirmed.json.action.handoff, { phone: f.recipientPhone, message: expected, documentQuery: null, documentId: null, photoId: null });
     assert.equal(sentEmails.length, 0);
 
     const again = await action(userA, pending.id, "confirm");
@@ -960,6 +960,7 @@ describe("documents: sharing on WhatsApp", () => {
       message: "",
       documentQuery: pending.documentQuery,
       documentId: doc.documentId,
+      photoId: null,
     });
 
     const opened = await action(userA, pending.id, "handoff", { result: "whatsapp_opened" });

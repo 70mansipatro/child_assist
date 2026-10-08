@@ -191,6 +191,79 @@ class ChatApi {
     return raw is Map<String, dynamic> ? ChatMessage.fromJson(raw) : null;
   }
 
+  /// For a photo search on this phone: what it showed. Only the metadata of the shown photos is
+  /// sent (when taken, size, the matched saved place): never images, file names, paths or URIs.
+  /// Returns the server's opaque id for each shown photo, in the same order.
+  Future<List<String>> reportPhotoSearch(
+    String token,
+    String requestId, {
+    required String outcome,
+    List<Map<String, dynamic>> photos = const [],
+    int? total,
+    String? reason,
+    bool limited = false,
+    String? conversationId,
+  }) async {
+    final json = await _client.post(
+      '/api/chat/photo-searches/${Uri.encodeComponent(requestId)}/results',
+      token: token,
+      body: {
+        'outcome': outcome,
+        'photos': photos,
+        'total': ?total,
+        'reason': ?reason,
+        if (limited) 'limited': true,
+        'conversationId': ?conversationId,
+      },
+    );
+    final ids = [
+      for (final p in (json['photos'] as List? ?? const []).whereType<Map<String, dynamic>>())
+        if (p['id'] is String) p['id'] as String,
+    ];
+    if (ids.length != photos.length) throw ApiException('Something went wrong. Please try again.');
+    return ids;
+  }
+
+  /// The user picked [photoId] among the photos shown: it becomes the photo being talked about.
+  Future<void> selectPhoto(String token, String photoId, {String? conversationId}) async {
+    await _client.post(
+      '/api/chat/photos/${Uri.encodeComponent(photoId)}/select',
+      token: token,
+      body: {'conversationId': ?conversationId},
+    );
+  }
+
+  /// For a question about a photo: the ONE photo being asked about, scaled down, as base64. The
+  /// server has Gemini vision answer from it and returns the reply; the image itself is not kept.
+  Future<ChatMessage> answerPhotoAnalysis(
+    String token,
+    String requestId, {
+    required String photoId,
+    required String imageBase64,
+    String? conversationId,
+  }) async {
+    final json = await _client.post(
+      '/api/chat/photo-analyses/${Uri.encodeComponent(requestId)}/answer',
+      token: token,
+      timeout: replyTimeout,
+      body: {'photoId': photoId, 'image': imageBase64, 'conversationId': ?conversationId},
+    );
+    final message = ChatMessage.fromJson(json['message'] as Map<String, dynamic>? ?? const {});
+    if (message == null) throw ApiException('Something went wrong. Please try again.');
+    return message;
+  }
+
+  /// For a question about a photo: why this phone could not send it. Returns the message to show.
+  Future<ChatMessage?> failPhotoAnalysis(String token, String requestId, String reason, {String? conversationId}) async {
+    final json = await _client.post(
+      '/api/chat/photo-analyses/${Uri.encodeComponent(requestId)}/fail',
+      token: token,
+      body: {'reason': reason, 'conversationId': ?conversationId},
+    );
+    final raw = json['message'];
+    return raw is Map<String, dynamic> ? ChatMessage.fromJson(raw) : null;
+  }
+
   /// Runs an action the user explicitly confirmed. Returns the server's outcome.
   Future<ActionOutcome> confirmAction(String token, String id, {String? conversationId}) =>
       _action(token, id, 'confirm', {'conversationId': ?conversationId});

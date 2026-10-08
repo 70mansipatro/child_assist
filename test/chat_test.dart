@@ -345,17 +345,20 @@ void main() {
     expect(find.byType(DocumentViewerScreen), findsOneWidget);
   });
 
-  testWidgets('photo results show thumbnails from the phone, or a permission note', (tester) async {
+  testWidgets('photo results show the photo from the phone, or a permission note', (tester) async {
     await startApp(tester);
     await openChat(tester);
-    backend.chatResponder = (_) => const FakeChatReply(
-          "Here are yesterday's photos.",
+    var next = 1;
+    backend.chatResponder = (_) => FakeChatReply(
+          'Let me find that photo.',
           toolEvents: [
             {
               'kind': 'photos',
               'status': 'device_lookup',
               'data': {
-                'query': {'text': null, 'startDate': '2026-10-05T00:00:00.000Z', 'endDate': '2026-10-06T00:00:00.000Z', 'limit': 12},
+                'requestId': 'search${next++}',
+                'query': {'startDate': '2026-10-05T00:00:00.000Z', 'endDate': '2026-10-06T00:00:00.000Z'},
+                'visits': <Object>[],
               },
             },
           ],
@@ -368,7 +371,8 @@ void main() {
 
     os.os[AppPermission.photos] = PermissionState.granted;
     await send(tester, 'Find photos from yesterday.');
-    expect(find.text('1 photo found'), findsOneWidget);
+    expect(find.text('Open Photo'), findsOneWidget);
+    expect(find.text('Analyze'), findsOneWidget);
     expect(photos.imageReads.every((r) => r.endsWith('300x300')), isTrue, reason: 'thumbnails only');
   });
 

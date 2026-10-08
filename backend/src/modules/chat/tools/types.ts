@@ -11,6 +11,8 @@ export type ToolErrorCode =
   | "DOCUMENT_NOT_FOUND"
   | "DOCUMENT_UNAVAILABLE"
   | "TEXT_EXTRACTION_UNAVAILABLE"
+  | "PHOTO_NOT_FOUND"
+  | "NO_PHOTO_SELECTED"
   | "WEB_SEARCH_NOT_CONFIGURED"
   | "ACTION_NOT_CONFIGURED"
   | "INVALID_RECIPIENT"
@@ -45,7 +47,7 @@ export interface PendingActionView {
   id: string;
   /** The tool that prepared it, e.g. "prepare_email". */
   toolName: string;
-  type: "SEND_EMAIL" | "SEND_WHATSAPP" | "SHARE_LOCATION" | "SHARE_TRAVEL_HISTORY" | "SHARE_DOCUMENT" | "SHARE_CONTACT";
+  type: "SEND_EMAIL" | "SEND_WHATSAPP" | "SHARE_LOCATION" | "SHARE_TRAVEL_HISTORY" | "SHARE_DOCUMENT" | "SHARE_CONTACT" | "SHARE_PHOTO";
   channel: "EMAIL" | "WHATSAPP";
   status: "PENDING" | "CONFIRMED" | "CANCELLED" | "COMPLETED" | "FAILED" | "EXPIRED";
   summary: string;
@@ -79,6 +81,11 @@ export interface PendingActionView {
   sharedContactQuery: string | null;
   sharedContactName: string | null;
   sharedContactPhone: string | null;
+  /**
+   * For SHARE_PHOTO: the server's opaque id of the photo (photo_...), one this user was shown in
+   * this conversation. The phone resolves it in its own gallery; no path or URI ever leaves it.
+   */
+  photoId: string | null;
   expiresAt: string;
 }
 
@@ -106,6 +113,10 @@ export type ToolEventKind =
   | "location_history"
   | "current_location"
   | "photos"
+  /** Gemini vision looking at the one photo being talked about. */
+  | "photo_analysis"
+  /** Sharing a photo from this phone, after the user confirms on the card. */
+  | "photo_share"
   | "documents"
   | "document_text"
   | "web_search"

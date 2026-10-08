@@ -3,24 +3,13 @@
 // Real implementations plug in via configureChatProviders() without touching tool or AI code.
 
 // ---------------------------------------------------------------------------------------------
-// Device data. Photos (Phase 5) and documents (Phase 6) live only on the user's phone: the app
+// Device data. Photos and documents live only on the user's phone: the app
 // keeps metadata and a private file reference locally and uploads nothing. The backend therefore
 // has no copy of them, and there is not yet a secure channel for the phone to answer a request
 // from the backend. A future DeviceGateway (e.g. the app answering tool requests over an
 // authenticated round trip) implements this interface.
 
 export type DocumentKind = "PDF" | "DOC" | "DOCX" | "TXT";
-
-export interface DevicePhoto {
-  id: string;
-  name?: string | null;
-  mimeType?: string | null;
-  fileSize?: number | null;
-  width?: number | null;
-  height?: number | null;
-  createdAt: Date;
-  modifiedAt?: Date | null;
-}
 
 export interface DeviceDocument {
   id: string;
@@ -45,13 +34,6 @@ export interface DeviceLocation {
   capturedAt: Date;
 }
 
-export interface PhotoQuery {
-  text?: string;
-  since?: Date;
-  before?: Date;
-  limit: number;
-}
-
 export interface DocumentQuery {
   text?: string;
   type?: DocumentKind;
@@ -62,7 +44,6 @@ export interface DeviceGateway {
   /** False until a secure device handoff exists; tools then answer *_UNAVAILABLE. */
   readonly available: boolean;
   getCurrentLocation(userId: string): Promise<DeviceLocation | null>;
-  searchPhotos(userId: string, query: PhotoQuery): Promise<DevicePhoto[]>;
   searchDocuments(userId: string, query: DocumentQuery): Promise<DeviceDocument[]>;
   /** Only documents the user added in the app and the OS still grants access to. */
   readDocument(userId: string, documentId: string): Promise<DeviceDocumentContent | null>;
@@ -71,7 +52,6 @@ export interface DeviceGateway {
 const unavailableDevice: DeviceGateway = {
   available: false,
   getCurrentLocation: async () => null,
-  searchPhotos: async () => [],
   searchDocuments: async () => [],
   readDocument: async () => null,
 };

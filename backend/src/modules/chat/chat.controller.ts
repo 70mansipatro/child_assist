@@ -10,6 +10,8 @@ import {
 } from "./actions/pending-actions";
 import { handleChatTurn } from "./chat.orchestrator";
 import { answerDocumentRead, failDocumentRead } from "./documents/document-reads";
+import { selectPhoto } from "./photos/photo-references";
+import { answerPhotoAnalysis, failPhotoRequest, recordPhotoSearch } from "./photos/photo-requests";
 import * as chatService from "./chat.service";
 import {
   actionDocumentSchema,
@@ -23,6 +25,10 @@ import {
   documentReadFailSchema,
   idParamsSchema,
   listConversationsQuerySchema,
+  photoAnalysisAnswerSchema,
+  photoAnalysisFailSchema,
+  photoParamsSchema,
+  photoSearchResultSchema,
   updateConversationSchema,
 } from "./chat.validation";
 
@@ -121,4 +127,32 @@ export async function actionHandoff(req: Request, res: Response): Promise<void> 
   const { conversationId, result } = actionHandoffSchema.parse(req.body ?? {});
   const action = await completeHandoff(getAuth(req).userId, id, result, { conversationId });
   res.status(200).json({ action });
+}
+
+export async function reportPhotoSearch(req: Request, res: Response): Promise<void> {
+  const { id } = idParamsSchema.parse(req.params);
+  const { conversationId, ...report } = photoSearchResultSchema.parse(req.body ?? {});
+  const result = await recordPhotoSearch(getAuth(req).userId, id, report, { conversationId });
+  res.status(200).json(result);
+}
+
+export async function choosePhoto(req: Request, res: Response): Promise<void> {
+  const { photoId } = photoParamsSchema.parse(req.params);
+  const { conversationId } = actionScopeSchema.parse(req.body ?? {});
+  const photo = await selectPhoto(getAuth(req).userId, photoId, { conversationId });
+  res.status(200).json({ photo });
+}
+
+export async function answerPhotoAnalysisRequest(req: Request, res: Response): Promise<void> {
+  const { id } = idParamsSchema.parse(req.params);
+  const { conversationId, photoId, image } = photoAnalysisAnswerSchema.parse(req.body ?? {});
+  const result = await answerPhotoAnalysis(getAuth(req).userId, id, { photoId, image }, { conversationId });
+  res.status(200).json(result);
+}
+
+export async function failPhotoAnalysisRequest(req: Request, res: Response): Promise<void> {
+  const { id } = idParamsSchema.parse(req.params);
+  const { conversationId, reason } = photoAnalysisFailSchema.parse(req.body ?? {});
+  const result = await failPhotoRequest(getAuth(req).userId, id, reason, { conversationId });
+  res.status(200).json(result);
 }

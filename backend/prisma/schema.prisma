@@ -38,6 +38,8 @@ model User {
   chatToolCalls     ChatToolCall[]
   chatActions       ChatAction[]
   documentReads     DocumentReadRequest[]
+  photoReferences   PhotoReference[]
+  photoRequests     PhotoRequest[]
 
   emailVerificationCodes EmailVerificationCode[]
   passwordResetCodes     PasswordResetCode[]
@@ -195,6 +197,8 @@ model ChatConversation {
   toolCalls ChatToolCall[]
   actions   ChatAction[]
   documentReads DocumentReadRequest[]
+  photoReferences PhotoReference[]
+  photoRequests   PhotoRequest[]
 
   @@index([userId])
   @@index([updatedAt])
@@ -259,6 +263,8 @@ enum ChatActionType {
   SHARE_DOCUMENT
   // Another contact's phone number, looked up and picked on the phone ("send A's number to B").
   SHARE_CONTACT
+  // One photo from the user's phone gallery, found in this conversation (PhotoReference).
+  SHARE_PHOTO
 }
 
 // How the action reaches the recipient. EMAIL is sent by the backend over SMTP; WHATSAPP is opened
@@ -297,6 +303,9 @@ model ChatAction {
   sharedContactQuery String?         @map("shared_contact_query") @db.VarChar(120)
   sharedContactName  String?         @map("shared_contact_name") @db.VarChar(120)
   sharedContactPhone String?         @map("shared_contact_phone") @db.VarChar(32)
+  // For SHARE_PHOTO: the server's opaque id of the photo (a PhotoReference of this user), set when
+  // the action is prepared. Never a path, URI or device id: the phone resolves it locally.
+  photoId          String?           @map("photo_id") @db.VarChar(40)
   expiresAt        DateTime          @map("expires_at")
   confirmedAt      DateTime?         @map("confirmed_at")
   completedAt      DateTime?         @map("completed_at")
@@ -452,4 +461,73 @@ model DocumentReadRequest {
   @@index([userId, status])
   @@index([expiresAt])
   @@map("document_read_requests")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Photos in chat ("Show me the photo from where I went today", "What is in this photo?").
+//
+// Photos live only on the phone. The phone searches its own gallery, and for each photo it shows
+// in a conversation the server mints an opaque id (photo_...) and keeps only the metadata below:
+// no image bytes, no file name, no path, no content URI and no device asset id. The phone keeps
+// the mapping from that id to its own gallery entry. Every row belongs to the user from the JWT.
+
+model PhotoReference {
+  id             String    @id @db.VarChar(40)
+  userId         String    @map("user_id") @db.Uuid
+  conversationId String    @map("conversation_id")
+  capturedAt     DateTime  @map("captured_at")
+  width          Int?
+  height         Int?
+  // The user's own saved place the photo was matched to, and how ("GPS": the photo's own GPS
+  // metadata was near it; "TIME": taken close in time to it). Null when not matched to a place.
+  placeName      String?   @map("place_name") @db.VarChar(255)
+  placeEvidence  String?   @map("place_evidence") @db.VarChar(8)
+  // When the user picked it (or it was the only match): the photo now being talked about.
+  selectedAt     DateTime? @map("selected_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, conversationId, selectedAt])
+  @@map("photo_references")
+}
+
+enum PhotoRequestKind {
+  // The phone searches its gallery and reports which photos it showed.
+  SEARCH
+  // The phone sends the ONE photo being talked about for Gemini vision to answer a question.
+  ANALYZE
+}
+
+enum PhotoRequestStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+  EXPIRED
+}
+
+// A short-lived request from the assistant to the phone, answered once. The question is cleared
+// when it finishes; the image itself is never stored or logged.
+model PhotoRequest {
+  id             String             @id @default(cuid())
+  userId         String             @map("user_id") @db.Uuid
+  conversationId String             @map("conversation_id")
+  kind           PhotoRequestKind
+  status         PhotoRequestStatus @default(PENDING)
+  question       String?            @db.VarChar(500)
+  // ANALYZE: the PhotoReference to analyse.
+  photoId        String?            @map("photo_id") @db.VarChar(40)
+  expiresAt      DateTime           @map("expires_at")
+  completedAt    DateTime?          @map("completed_at")
+  createdAt      DateTime           @default(now()) @map("created_at")
+
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([expiresAt])
+  @@map("photo_requests")
 }

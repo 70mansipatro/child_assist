@@ -1,8 +1,14 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart' show DateTimeRange, DateUtils;
 
 import '../../../core/api/api_client.dart';
+import '../../../core/permissions/permission_service.dart' show PermissionState;
 import '../../contacts/services/message_handoff.dart';
 import '../../documents/services/document_service.dart';
+import '../../photos/services/photo_gallery_service.dart';
+import '../../photos/services/photo_matcher.dart';
 import '../data/chat_api.dart' show ActionOutcome;
 import '../models/chat_message.dart';
 import 'chat_service.dart';
@@ -72,6 +78,60 @@ class DocumentReadState {
   final String? message;
 }
 
+/// Where a photo search on this phone is.
+enum PhotoSearchPhase { searching, found, none, permission, failed }
+
+class PhotoSearchState {
+  const PhotoSearchState(
+    this.phase, {
+    this.photos = const [],
+    this.total = 0,
+    this.message,
+    this.limited = false,
+    this.selectedId,
+    this.contentHint = false,
+  });
+
+  final PhotoSearchPhase phase;
+
+  /// The strong matches shown, strongest first, each with the server's opaque id.
+  final List<ChatPhoto> photos;
+  final int total;
+
+  /// What to tell the user when nothing was found or something failed.
+  final String? message;
+
+  /// The OS only lets Child Assist see the photos the user selected.
+  final bool limited;
+
+  /// The photo the user picked among several.
+  final String? selectedId;
+
+  /// The user described what is IN the photo, which cannot be searched for.
+  final bool contentHint;
+
+  PhotoSearchState selecting(String id) => PhotoSearchState(
+        phase,
+        photos: photos,
+        total: total,
+        message: message,
+        limited: limited,
+        selectedId: id,
+        contentHint: contentHint,
+      );
+}
+
+/// Where looking at one photo for a question is.
+enum PhotoAnalysisPhase { analyzing, answered, failed }
+
+class PhotoAnalysisState {
+  const PhotoAnalysisState(this.phase, {this.photo, this.message});
+
+  final PhotoAnalysisPhase phase;
+  final ChatPhoto? photo;
+  final String? message;
+}
+
 /// The conversation shown on the chat screen: its messages, whether Child Assist is answering,
 /// and the last error. Typed and spoken messages both go through [send].
 class ChatSession extends ChangeNotifier {
@@ -79,15 +139,20 @@ class ChatSession extends ChangeNotifier {
     required ChatService service,
     MessageHandoff handoff = const NativeMessageHandoff(),
     DocumentService? documents,
+    PhotoGalleryService? photos,
   })  : _service = service,
         _handoff = handoff,
-        _documentService = documents;
+        _documentService = documents,
+        _gallery = photos;
 
   final ChatService _service;
   final MessageHandoff _handoff;
 
   /// The signed-in user's own documents, for document shares. Without it, nothing is shared.
   final DocumentService? _documentService;
+
+  /// The phone's own gallery, for photo searches, analysis and shares. Without it, none run.
+  final PhotoGalleryService? _gallery;
 
   static const documentUnavailableMessage = 'This document is no longer available. Nothing was shared.';
 
@@ -368,6 +433,255 @@ class ChatSession extends ChangeNotifier {
     notifyListeners();
   }
 
+  // -------------------------------------------------------------------------------------------
+  // Photos. The gallery never leaves the phone: the server asks this phone to search it, this
+  // phone shows the strong matches and reports only their metadata, and the server gives each an
+  // opaque id (photo_...). This map from those ids to gallery entries stays on this phone. For a
+  // question about a photo, only that ONE photo is sent, scaled down, for Gemini vision.
+
+  static const photoUnavailableMessage = 'This photo is no longer available on your device.';
+  static const photoNotFoundMessage = "I couldn't find a matching photo in your available photos.";
+
+  final Map<String, ChatPhoto> _photos = {};
+  final Map<String, PhotoSearchState> _photoSearches = {};
+  final Map<String, PhotoAnalysisState> _photoAnalyses = {};
+
+  /// Pages of the gallery read for one search at most (the newest photos first).
+  static const _maxSearchPages = 10;
+
+  /// Photos whose GPS position is read for one location search at most.
+  static const _maxPositions = 300;
+
+  PhotoSearchState? photoSearch(String requestId) => _photoSearches[requestId];
+  PhotoAnalysisState? photoAnalysis(String requestId) => _photoAnalyses[requestId];
+
+  /// A photo shown in this chat, by the server's opaque id.
+  ChatPhoto? photo(String photoId) => _photos[photoId];
+
+  /// Searches this phone's gallery for [requestId], once, and reports what it shows.
+  Future<void> startPhotoSearch(String requestId, PhotoSearchQuery query) async {
+    if (_photoSearches.containsKey(requestId)) return;
+    _setPhotoSearch(requestId, const PhotoSearchState(PhotoSearchPhase.searching));
+    final gallery = _gallery;
+    final contentHint = query.visualHint != null;
+    if (gallery == null) return _photoSearchFailed(requestId, "I couldn't read the photos on your phone.");
+
+    final permission = await gallery.permissionStatus();
+    if (!permission.isUsable) {
+      await _reportPhotoSearch(requestId, 'permission_denied');
+      _setPhotoSearch(requestId, const PhotoSearchState(PhotoSearchPhase.permission));
+      return;
+    }
+    final limited = permission == PermissionState.limited;
+
+    final PhotoMatchResult result;
+    try {
+      final photos = await _loadCandidates(gallery, query);
+      final positions = <String, PhotoPosition?>{};
+      if (query.locationContext && query.visits.isNotEmpty) {
+        for (final p in photos.take(_maxPositions)) {
+          positions[p.id] = await gallery.location(p);
+        }
+      }
+      result = PhotoMatcher.match(photos, query, positions: positions);
+    } on PhotoGalleryException {
+      await _reportPhotoSearch(requestId, 'failed');
+      return _photoSearchFailed(requestId, "I couldn't read the photos on your phone.");
+    }
+
+    if (result.matches.isEmpty) {
+      await _reportPhotoSearch(requestId, 'none', reason: result.reason?.wire, limited: limited);
+      _setPhotoSearch(
+        requestId,
+        PhotoSearchState(
+          PhotoSearchPhase.none,
+          message: _noMatchMessage(result.reason, limited),
+          limited: limited,
+          contentHint: contentHint,
+        ),
+      );
+      return;
+    }
+
+    final List<String> ids;
+    try {
+      ids = await _service.reportPhotoSearch(
+        requestId,
+        outcome: 'found',
+        photos: [for (final m in result.matches) m.toReport()],
+        total: result.total,
+        limited: limited,
+        conversationId: _conversationId,
+      );
+    } catch (e) {
+      return _photoSearchFailed(
+        requestId,
+        e is ApiException && e.statusCode != null
+            ? e.message
+            : "I couldn't finish finding your photo. Check your internet connection and ask again.",
+      );
+    }
+    final shown = [for (final (i, m) in result.matches.indexed) m.withId(ids[i])];
+    for (final p in shown) {
+      _photos[p.id!] = p;
+    }
+    _setPhotoSearch(
+      requestId,
+      PhotoSearchState(
+        PhotoSearchPhase.found,
+        photos: shown,
+        total: result.total,
+        limited: limited,
+        selectedId: shown.length == 1 ? shown.single.id : null,
+        contentHint: contentHint,
+      ),
+    );
+  }
+
+  /// The user picked one of several photos: it becomes the photo being talked about.
+  /// Returns an error to show, or null.
+  Future<String?> choosePhoto(String requestId, ChatPhoto photo) async {
+    final state = _photoSearches[requestId];
+    if (state == null || photo.id == null) return null;
+    try {
+      await _service.selectPhoto(photo.id!, conversationId: _conversationId);
+    } on ApiException catch (e) {
+      return e.statusCode == null ? 'Check your internet connection and try again.' : e.message;
+    }
+    _setPhotoSearch(requestId, state.selecting(photo.id!));
+    return null;
+  }
+
+  /// "Analyze" on a photo card: makes it the photo being talked about, then asks about it.
+  Future<void> analyzePhoto(ChatPhoto photo) async {
+    if (photo.id == null || _sending) return;
+    try {
+      await _service.selectPhoto(photo.id!, conversationId: _conversationId);
+    } catch (_) {
+      // The question still goes through; the server then uses the photo it last knew about.
+    }
+    await send('What is in this photo?');
+  }
+
+  /// Sends the one photo [photoId] for [requestId], once, so the answer comes from the image.
+  Future<void> startPhotoAnalysis(String requestId, String photoId) async {
+    if (_photoAnalyses.containsKey(requestId)) return;
+    final generation = _generation;
+    final photo = _photos[photoId];
+    _setPhotoAnalysis(requestId, PhotoAnalysisState(PhotoAnalysisPhase.analyzing, photo: photo));
+    final gallery = _gallery;
+    // Not shown on this phone in this session (e.g. after the app restarted): never guessed.
+    if (photo == null || gallery == null) return _failAnalysis(requestId, 'unavailable', photoUnavailableMessage);
+
+    if (!(await gallery.permissionStatus()).isUsable) {
+      return _failAnalysis(requestId, 'permission', "I can't access your photos because Photos permission is turned off.", photo: photo);
+    }
+    if (!await gallery.exists(photo.item)) return _failAnalysis(requestId, 'unavailable', photoUnavailableMessage, photo: photo);
+    final bytes = await gallery.analysisImage(photo.item);
+    if (bytes == null || bytes.isEmpty) return _failAnalysis(requestId, 'unavailable', photoUnavailableMessage, photo: photo);
+
+    try {
+      final answer = await _service.answerPhotoAnalysis(
+        requestId,
+        photoId: photoId,
+        imageBase64: base64Encode(bytes),
+        conversationId: _conversationId,
+      );
+      if (generation != _generation) return;
+      _messages = [..._messages, answer];
+      _setPhotoAnalysis(requestId, PhotoAnalysisState(PhotoAnalysisPhase.answered, photo: photo));
+    } catch (e) {
+      if (generation != _generation) return;
+      final message = e is ApiException && e.statusCode != null
+          ? e.message
+          : "I couldn't look at the photo. Check your internet connection and ask again.";
+      _setPhotoAnalysis(requestId, PhotoAnalysisState(PhotoAnalysisPhase.failed, photo: photo, message: message));
+    }
+  }
+
+  /// Shares [photo] after the user confirmed on its card: WhatsApp or the share sheet opens and
+  /// the user sends it there. Returns what to show; never says it was sent.
+  Future<String> sharePhoto(ChatPhoto photo, {required bool toWhatsApp, String? phone, String? text}) async {
+    final gallery = _gallery;
+    if (gallery == null || !await gallery.exists(photo.item)) return photoUnavailableMessage;
+    final reference = await gallery.shareReference(photo.item);
+    if (reference == null) return photoUnavailableMessage;
+    final result = await _handoff.shareDocument(
+      reference: reference,
+      mimeType: photo.item.mimeType ?? 'image/jpeg',
+      text: text,
+      phone: phone,
+      toWhatsApp: toWhatsApp,
+    );
+    return switch ((result, toWhatsApp)) {
+      (HandoffResult.opened, true) => 'WhatsApp opened. Tap Send to complete it.',
+      (HandoffResult.opened, false) => 'Share options opened. Nothing is sent until you send the photo from the app you choose.',
+      (_, true) => "WhatsApp isn't available on this device. Nothing was shared.",
+      (_, false) => "Sharing isn't available on this device. Nothing was shared.",
+    };
+  }
+
+  Future<List<PhotoItem>> _loadCandidates(PhotoGalleryService gallery, PhotoSearchQuery query) async {
+    final start = query.start?.toLocal();
+    final end = query.end?.toLocal();
+    DateTimeRange? range;
+    if (start != null && end != null && end.isAfter(start)) {
+      // The gallery's range end is a whole day; the exact bounds are applied by the matcher.
+      range = DateTimeRange(start: start, end: DateUtils.dateOnly(end.subtract(const Duration(microseconds: 1))));
+    }
+    final deep = range != null || query.fileName != null || query.locationContext;
+    final pages = deep ? _maxSearchPages : 1;
+    final photos = <PhotoItem>[];
+    for (var i = 0; i < pages; i++) {
+      final page = await gallery.loadPage(i, range: range);
+      photos.addAll(page);
+      if (page.length < gallery.pageSize) break;
+    }
+    return photos;
+  }
+
+  static String _noMatchMessage(PhotoNoMatchReason? reason, bool limited) {
+    final parts = [
+      photoNotFoundMessage,
+      switch (reason) {
+        PhotoNoMatchReason.noVisits => 'There are no saved locations for that time, so I couldn\'t match a photo to where you went.',
+        PhotoNoMatchReason.contentOnly =>
+          "I can search your photos by date, by the places you saved, or by file name, but I can't look inside every photo. Open a photo and ask me what's in it.",
+        PhotoNoMatchReason.noNameMatch => 'None of the photo names match that.',
+        null => null,
+      },
+      if (limited) 'Child Assist can only see the photos you allowed it to access.',
+    ];
+    return parts.whereType<String>().join(' ');
+  }
+
+  Future<void> _reportPhotoSearch(String requestId, String outcome, {String? reason, bool limited = false}) async {
+    try {
+      // So the chat history says what happened too. No photo data is sent.
+      await _service.reportPhotoSearch(requestId, outcome: outcome, reason: reason, limited: limited, conversationId: _conversationId);
+    } catch (_) {}
+  }
+
+  void _photoSearchFailed(String requestId, String message) =>
+      _setPhotoSearch(requestId, PhotoSearchState(PhotoSearchPhase.failed, message: message));
+
+  Future<void> _failAnalysis(String requestId, String reason, String message, {ChatPhoto? photo}) async {
+    _setPhotoAnalysis(requestId, PhotoAnalysisState(PhotoAnalysisPhase.failed, photo: photo, message: message));
+    try {
+      await _service.failPhotoAnalysis(requestId, reason, conversationId: _conversationId);
+    } catch (_) {}
+  }
+
+  void _setPhotoSearch(String requestId, PhotoSearchState state) {
+    _photoSearches[requestId] = state;
+    notifyListeners();
+  }
+
+  void _setPhotoAnalysis(String requestId, PhotoAnalysisState state) {
+    _photoAnalyses[requestId] = state;
+    notifyListeners();
+  }
+
   Future<String?> _updateFromServer(String actionId, Future<PendingAction> Function() request) async {
     try {
       final server = await request();
@@ -391,6 +705,20 @@ class ChatSession extends ChangeNotifier {
     final action = _findAction(actionId);
     if (action == null || !action.isOpen) return;
     _updateAction(actionId, (a) => a.copyWith(state: PendingActionState.confirming));
+
+    ChatPhoto? photo;
+    if (action.isPhotoShare) {
+      photo = action.photoId == null ? null : _photos[action.photoId!];
+      final gallery = _gallery;
+      if (photo == null || gallery == null || !await gallery.exists(photo.item)) {
+        // Declined on the server too, so it can never run later.
+        try {
+          await _service.cancelAction(actionId, conversationId: _conversationId);
+        } catch (_) {}
+        _updateAction(actionId, (a) => a.copyWith(state: PendingActionState.failed, resultMessage: photoUnavailableMessage));
+        return;
+      }
+    }
 
     DocumentItem? document;
     if (action.isDocumentShare) {
@@ -435,8 +763,41 @@ class ChatSession extends ChangeNotifier {
       return;
     }
 
+    if (photo != null && handoff.photoId != photo.id) {
+      // The server confirmed a different photo than the one checked here: share nothing.
+      await _report(actionId, 'unavailable');
+      _updateAction(
+        actionId,
+        (a) => a.copyWith(state: PendingActionState.failed, resultMessage: 'Something went wrong. Nothing was shared.'),
+      );
+      return;
+    }
+
     _updateAction(actionId, (a) => a.copyWith(state: PendingActionState.handingOff, handoff: handoff));
     _documents[actionId] = document;
+    if (photo != null) {
+      _photoShares[actionId] = photo;
+      final reference = await _gallery!.shareReference(photo.item);
+      final opened = reference != null &&
+          await _handoff.shareDocument(
+                reference: reference,
+                mimeType: photo.item.mimeType ?? 'image/jpeg',
+                text: handoff.message.isEmpty ? null : handoff.message,
+                phone: handoff.phone,
+                toWhatsApp: true,
+              ) ==
+              HandoffResult.opened;
+      if (opened) {
+        await _finishHandoff(actionId, 'whatsapp_opened', whatsApp: true);
+      } else {
+        await _report(actionId, 'unavailable');
+        _updateAction(
+          actionId,
+          (a) => a.copyWith(state: PendingActionState.whatsAppUnavailable, resultMessage: "WhatsApp isn't available on this device."),
+        );
+      }
+      return;
+    }
     final result = document != null
         ? await _handoff.shareDocument(
             reference: document.reference,
@@ -481,13 +842,26 @@ class ChatSession extends ChangeNotifier {
   // The document picked for a WhatsApp share, kept for the share-sheet fallback.
   final Map<String, DocumentItem?> _documents = {};
 
+  // Likewise the photo of a confirmed photo share.
+  final Map<String, ChatPhoto> _photoShares = {};
+
   /// After WhatsApp was unavailable: offers the same confirmed message through the share sheet.
   Future<void> shareInstead(String actionId) async {
     final handoff = _findAction(actionId)?.handoff;
     if (handoff == null) return;
     _updateAction(actionId, (a) => a.copyWith(state: PendingActionState.handingOff));
     final document = _documents[actionId];
-    final result = document != null
+    final photo = _photoShares[actionId];
+    final photoReference = photo == null ? null : await _gallery?.shareReference(photo.item);
+    final result = photo != null
+        ? (photoReference == null
+            ? HandoffResult.unavailable
+            : await _handoff.shareDocument(
+                reference: photoReference,
+                mimeType: photo.item.mimeType ?? 'image/jpeg',
+                text: handoff.message.isEmpty ? null : handoff.message,
+              ))
+        : document != null
         ? await _handoff.shareDocument(
             reference: document.reference,
             mimeType: document.mimeType ?? document.type.mimeType,
@@ -518,7 +892,9 @@ class ChatSession extends ChangeNotifier {
           state: PendingActionState.cancelled,
           resultMessage: outcome.message.isNotEmpty
               ? outcome.message
-              : a.isDocumentShare
+              : a.isPhotoShare
+                  ? "Okay, I didn't share the photo."
+                  : a.isDocumentShare
                   ? "Okay, I didn't share the document."
                   : "Okay, I didn't send anything.",
         ),
@@ -534,7 +910,11 @@ class ChatSession extends ChangeNotifier {
   Future<void> _finishHandoff(String actionId, String result, {required bool whatsApp}) async {
     final action = _findAction(actionId);
     final name = action?.recipientName ?? 'your contact';
-    var message = action?.isDocumentShare == true
+    var message = action?.isPhotoShare == true
+        ? whatsApp
+            ? 'WhatsApp opened. Tap Send to complete it.'
+            : 'Share options opened. Nothing is sent until you send the photo from the app you choose.'
+        : action?.isDocumentShare == true
         ? whatsApp
             ? 'WhatsApp opened. Please tap Send to send the document.'
             : 'Share options opened. Nothing is sent until you send the document from the app you choose.'
@@ -548,6 +928,7 @@ class ChatSession extends ChangeNotifier {
       // It did open; the report only updates the chat history.
     }
     _documents.remove(actionId);
+    _photoShares.remove(actionId);
     _updateAction(actionId, (a) => a.copyWith(state: PendingActionState.done, resultMessage: message));
   }
 

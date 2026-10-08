@@ -139,6 +139,50 @@ class ChatService {
   Future<ChatMessage?> failDocumentRead(String requestId, String reason, {String? conversationId}) =>
       _auth.authorized((token) => _api.failDocumentRead(token, requestId, reason, conversationId: conversationId));
 
+  Future<List<String>> reportPhotoSearch(
+    String requestId, {
+    required String outcome,
+    List<Map<String, dynamic>> photos = const [],
+    int? total,
+    String? reason,
+    bool limited = false,
+    String? conversationId,
+  }) =>
+      _auth.authorized(
+        (token) => _api.reportPhotoSearch(
+          token,
+          requestId,
+          outcome: outcome,
+          photos: photos,
+          total: total,
+          reason: reason,
+          limited: limited,
+          conversationId: conversationId,
+        ),
+      );
+
+  Future<void> selectPhoto(String photoId, {String? conversationId}) =>
+      _auth.authorized((token) => _api.selectPhoto(token, photoId, conversationId: conversationId));
+
+  Future<ChatMessage> answerPhotoAnalysis(
+    String requestId, {
+    required String photoId,
+    required String imageBase64,
+    String? conversationId,
+  }) =>
+      _auth.authorized(
+        (token) => _api.answerPhotoAnalysis(
+          token,
+          requestId,
+          photoId: photoId,
+          imageBase64: imageBase64,
+          conversationId: conversationId,
+        ),
+      );
+
+  Future<ChatMessage?> failPhotoAnalysis(String requestId, String reason, {String? conversationId}) =>
+      _auth.authorized((token) => _api.failPhotoAnalysis(token, requestId, reason, conversationId: conversationId));
+
   Future<ActionOutcome> confirmAction(String id, {String? conversationId}) =>
       _auth.authorized((token) => _api.confirmAction(token, id, conversationId: conversationId));
 

@@ -24,6 +24,9 @@
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32"/>
+    <!-- Android 10+: lets the app read the GPS position stored in a photo, only to match photos to
+         the user's own saved places when they ask in chat. Without it, matching uses time only. -->
+    <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION"/>
     <!-- Android 13+; older versions allow notifications by default. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- Contacts: read only, searched on the phone when the user asks for a contact in chat.

@@ -4,7 +4,7 @@ import { authRouter } from "./modules/auth/auth.routes";
 import { profileRouter } from "./modules/profile/profile.routes";
 import { permissionsRouter } from "./modules/permissions/permissions.routes";
 import { locationRouter } from "./modules/location/location.routes";
-import { chatRouter, DOCUMENT_READ_ANSWER_PATH } from "./modules/chat/chat.routes";
+import { chatRouter, DOCUMENT_READ_ANSWER_PATH, PHOTO_ANALYSIS_ANSWER_PATH } from "./modules/chat/chat.routes";
 import { notificationsRouter } from "./modules/notifications/notification.routes";
 import { errorHandler, notFoundHandler } from "./middleware/error.middleware";
 import { corsMiddleware } from "./middleware/cors.middleware";
@@ -16,9 +16,11 @@ export function createApp(): Express {
   app.disable("x-powered-by");
   app.use(corsMiddleware);
   const json = express.json({ limit: "100kb" });
-  // A document read carries one document's extracted text and has its own limit (chat.routes.ts),
-  // applied after authentication. Every other request keeps the small limit.
-  app.use((req, res, next) => (DOCUMENT_READ_ANSWER_PATH.test(req.path) ? next() : json(req, res, next)));
+  // A document read carries one document's extracted text, and a photo analysis one scaled-down
+  // image; each has its own limit (chat.routes.ts), applied after authentication. Every other
+  // request keeps the small limit.
+  const ownLimit = (path: string) => DOCUMENT_READ_ANSWER_PATH.test(path) || PHOTO_ANALYSIS_ANSWER_PATH.test(path);
+  app.use((req, res, next) => (ownLimit(req.path) ? next() : json(req, res, next)));
 
   app.get("/health", (_req: Request, res: Response) => {
     res.status(200).json({

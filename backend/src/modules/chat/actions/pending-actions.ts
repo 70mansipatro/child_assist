@@ -57,6 +57,8 @@ export interface ActionDraft {
   documentQuery: string | null;
   /** For SHARE_CONTACT: the name of the contact whose number is shared, as the user said it. */
   sharedContactQuery: string | null;
+  /** For SHARE_PHOTO: the user's own photo reference being talked about in this chat. */
+  photoId: string | null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -91,10 +93,13 @@ export function summaryFor(action: ChatAction): string {
       return `Share your travel history with ${target} ${via}?`;
     case ChatActionType.SHARE_DOCUMENT:
       return `Do you want to share this document with ${target} ${via}?`;
+    case ChatActionType.SHARE_PHOTO:
+      return `Do you want to share this photo with ${target} ${via}?`;
   }
 }
 
 const isDocumentShare = (action: Pick<ChatAction, "type">) => action.type === ChatActionType.SHARE_DOCUMENT;
+const isPhotoShare = (action: Pick<ChatAction, "type">) => action.type === ChatActionType.SHARE_PHOTO;
 
 const TOOL_NAMES: Record<ChatActionChannel, string> = {
   [ChatActionChannel.EMAIL]: "prepare_email",
@@ -123,6 +128,7 @@ export function toView(action: ChatAction): PendingActionView {
     sharedContactQuery: action.sharedContactQuery,
     sharedContactName: action.sharedContactName,
     sharedContactPhone: action.sharedContactPhone,
+    photoId: action.photoId,
     expiresAt: action.expiresAt.toISOString(),
   };
 }
@@ -170,6 +176,7 @@ export async function preparePendingAction(ctx: ToolContext, draft: ActionDraft)
       dataSummary: draft.dataSummary,
       documentQuery: draft.documentQuery,
       sharedContactQuery: draft.sharedContactQuery,
+      photoId: draft.photoId,
       expiresAt: new Date(Date.now() + PENDING_ACTION_TTL_MS),
     },
   });
@@ -367,7 +374,14 @@ export interface ActionOutcome extends PendingActionView {
    * WhatsApp only: what the phone must open. The user still sends it in WhatsApp. For a document
    * share, [documentId] is the document the user confirmed: the phone shares exactly that one.
    */
-  handoff?: { phone: string; message: string; documentQuery: string | null; documentId: string | null };
+  handoff?: {
+    phone: string;
+    message: string;
+    documentQuery: string | null;
+    documentId: string | null;
+    /** For a photo share: the photo the user confirmed, which the phone shares exactly. */
+    photoId: string | null;
+  };
 }
 
 function outcome(action: ChatAction, outcomeMessage: string, extra: Partial<ActionOutcome> = {}): ActionOutcome {
@@ -395,6 +409,8 @@ export async function confirmPendingAction(userId: string, id: string, scope: Ac
         { OR: [{ type: { not: ChatActionType.SHARE_CONTACT } }, { sharedContactPhone: { not: null } }] },
         // Likewise the document: the user must have picked it before confirming.
         { OR: [{ type: { not: ChatActionType.SHARE_DOCUMENT } }, { documentId: { not: null } }] },
+        // And the photo, which the server attached when preparing it.
+        { OR: [{ type: { not: ChatActionType.SHARE_PHOTO } }, { photoId: { not: null } }] },
       ],
     },
     // The phone gets a fresh window to open WhatsApp after the user confirmed.
@@ -412,6 +428,7 @@ export async function confirmPendingAction(userId: string, id: string, scope: Ac
       message: action.message ?? "",
       documentQuery: action.documentQuery,
       documentId: action.documentId,
+      photoId: action.photoId,
     },
   });
 }
@@ -499,7 +516,11 @@ export async function completeHandoff(
     notifyInBackground(userId, templates.whatsappOpened(), { dedupeKey: `whatsapp-action:${id}` });
   }
 
-  const message = isDocumentShare(action)
+  const message = isPhotoShare(action)
+    ? result === "whatsapp_opened"
+      ? "WhatsApp opened. Tap Send to complete it."
+      : "Share options opened. Nothing is sent until you send the photo from the app you choose."
+    : isDocumentShare(action)
     ? result === "whatsapp_opened"
       ? "WhatsApp opened. Please tap Send to send the document."
       : "Share options opened. Nothing is sent until you send the document from the app you choose."
@@ -519,7 +540,11 @@ export async function cancelPendingAction(userId: string, id: string, scope: Act
   });
   if (count === 0) throw await rejection(userId, id, scope, action.status);
   await audit(userId, id, auditStatusOf(action.status), "CANCELLED");
-  const message = isDocumentShare(action) ? "Okay, I didn't share the document." : "Okay, I didn't send anything.";
+  const message = isPhotoShare(action)
+    ? "Okay, I didn't share the photo."
+    : isDocumentShare(action)
+      ? "Okay, I didn't share the document."
+      : "Okay, I didn't send anything.";
   await note(userId, action.conversationId, message);
   return outcome(await load(userId, id, scope), message);
 }

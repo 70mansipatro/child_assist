@@ -7,6 +7,11 @@ export const DOCUMENT_READ_BODY_LIMIT = "1mb";
 /** Only this path may exceed the app-wide JSON limit. */
 export const DOCUMENT_READ_ANSWER_PATH = /^\/api\/chat\/document-reads\/[^/]+\/answer$/;
 
+/** Room for one scaled-down photo as base64 (the decoded image is limited to 5 MB). */
+export const PHOTO_ANALYSIS_BODY_LIMIT = "8mb";
+/** Only this path may carry an image. */
+export const PHOTO_ANALYSIS_ANSWER_PATH = /^\/api\/chat\/photo-analyses\/[^/]+\/answer$/;
+
 export const chatRouter = Router();
 
 chatRouter.use(requireAuth);
@@ -35,3 +40,14 @@ chatRouter.post(
   chatController.answerDocumentReadRequest,
 );
 chatRouter.post("/document-reads/:id/fail", chatController.failDocumentReadRequest);
+// Photos in chat. The phone reports which photos its own gallery search showed (metadata only;
+// the server mints opaque ids), the photo the user picked, and, for a question about a photo, the
+// ONE photo being asked about, which Gemini vision answers from. Its own, larger body limit.
+chatRouter.post("/photo-searches/:id/results", chatController.reportPhotoSearch);
+chatRouter.post("/photos/:photoId/select", chatController.choosePhoto);
+chatRouter.post(
+  "/photo-analyses/:id/answer",
+  express.json({ limit: PHOTO_ANALYSIS_BODY_LIMIT }),
+  chatController.answerPhotoAnalysisRequest,
+);
+chatRouter.post("/photo-analyses/:id/fail", chatController.failPhotoAnalysisRequest);

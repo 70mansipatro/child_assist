@@ -68,7 +68,12 @@ class PermissionService {
   Future<PermissionState> requestLocationPermission() => request(AppPermission.location);
   Future<PermissionState> requestMicrophonePermission() => request(AppPermission.microphone);
   Future<PermissionState> requestCameraPermission() => request(AppPermission.camera);
-  Future<PermissionState> requestPhotoPermission() => request(AppPermission.photos);
+  Future<PermissionState> requestPhotoPermission() async {
+    final state = await request(AppPermission.photos);
+    // Asked in the same moment as Photos, never on its own from chat.
+    if (state.isUsable) await requestMediaLocation();
+    return state;
+  }
   Future<PermissionState> requestNotificationPermission() => request(AppPermission.notifications);
   Future<PermissionState> requestContactsPermission() => request(AppPermission.contacts);
 
@@ -108,6 +113,23 @@ class PermissionService {
     } catch (e) {
       debugPrint('Permission request failed for background location: $e');
       return PermissionState.unavailable;
+    }
+  }
+
+  /// Android 10+ hides the GPS position stored in photos unless the app holds
+  /// ACCESS_MEDIA_LOCATION. It is used only to match a photo to the user's own saved places when
+  /// they ask ("the photo from where I went today"); without it, photos are matched by time only.
+  /// Best effort: on most phones it is granted without a dialog once Photos is allowed.
+  Future<void> requestMediaLocation() async {
+    if (!_isMobile || _platform != TargetPlatform.android) return;
+    try {
+      final sdk = _cachedSdkInt ??= await _androidSdkInt();
+      if (sdk == null || sdk < 29) return;
+      if (!(await ph.Permission.accessMediaLocation.status).isGranted) {
+        await ph.Permission.accessMediaLocation.request();
+      }
+    } catch (e) {
+      debugPrint('Media location request failed: ${e.runtimeType}');
     }
   }
 

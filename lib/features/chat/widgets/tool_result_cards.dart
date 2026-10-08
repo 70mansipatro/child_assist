@@ -5,13 +5,14 @@ import '../../contacts/services/contact_service.dart';
 import '../../documents/services/document_service.dart';
 import '../../documents/widgets/document_share.dart' show ShareDocument;
 import '../../photos/services/photo_gallery_service.dart';
-import '../../photos/widgets/photo_grid.dart' show PhotoThumbnail;
 import '../models/chat_message.dart';
 import '../services/chat_session.dart';
 import 'contact_result_card.dart';
 import 'document_result_cards.dart';
+import 'photo_result_cards.dart';
 
 export 'document_result_cards.dart';
+export 'photo_result_cards.dart';
 
 /// Sets an action's recipient; returns an error to show, or null on success.
 typedef ChooseRecipient = Future<String?> Function(String actionId, {required String address, String? name});
@@ -90,7 +91,24 @@ Widget? toolResultCard(ChatToolEvent event, ChatResultContext context) {
       query: event.query,
       results: context,
     ),
-    (ChatToolKind.photos, ChatToolStatus.deviceLookup) => PhotoResultsCard(query: event.query, results: context),
+    (ChatToolKind.photos, ChatToolStatus.deviceLookup) when event.requestId != null && event.photoSearch != null =>
+      PhotoSearchCard(
+        key: ValueKey('photos-${event.requestId}'),
+        requestId: event.requestId!,
+        query: event.photoSearch!,
+        results: context,
+      ),
+    (ChatToolKind.photos, ChatToolStatus.success) when event.photoId != null =>
+      ShownPhotoCard(photoId: event.photoId!, results: context),
+    (ChatToolKind.photoAnalysis, ChatToolStatus.deviceLookup) when event.requestId != null && event.photoId != null =>
+      PhotoAnalysisCard(
+        key: ValueKey('analysis-${event.requestId}'),
+        requestId: event.requestId!,
+        photoId: event.photoId!,
+        results: context,
+      ),
+    (ChatToolKind.photoShare, ChatToolStatus.confirmationRequired) when event.photoId != null =>
+      PhotoShareCard(photoId: event.photoId!, toWhatsApp: event.shareToWhatsApp, results: context),
     (ChatToolKind.contacts, ChatToolStatus.deviceLookup) => ContactLookupCard(
       query: event.query,
       contactService: context.contactService,
@@ -103,7 +121,7 @@ Widget? toolResultCard(ChatToolEvent event, ChatResultContext context) {
 
 ChatPermission _permissionFor(ChatToolKind kind) => switch (kind) {
       ChatToolKind.locationHistory || ChatToolKind.currentLocation => ChatPermission.location,
-      ChatToolKind.photos => ChatPermission.photos,
+      ChatToolKind.photos || ChatToolKind.photoAnalysis || ChatToolKind.photoShare => ChatPermission.photos,
       ChatToolKind.documents || ChatToolKind.documentText => ChatPermission.documents,
       ChatToolKind.contacts => ChatPermission.contacts,
       _ => ChatPermission.other,
@@ -134,7 +152,8 @@ class PermissionRequiredCard extends StatelessWidget {
         ChatToolKind.locationHistory =>
           "I can't access your location history because Location permission is turned off.",
         ChatToolKind.currentLocation => "I can't access your location because Location permission is turned off.",
-        ChatToolKind.photos => "I can't access your photos because Photos permission is turned off.",
+        ChatToolKind.photos || ChatToolKind.photoAnalysis || ChatToolKind.photoShare =>
+          "I can't access your photos because Photos permission is turned off.",
         ChatToolKind.documents || ChatToolKind.documentText =>
           "I can't access your documents because Documents access is turned off.",
         _ when permission == ChatPermission.contacts => 'I need Contacts permission to search your phone contacts.',
@@ -213,122 +232,6 @@ class LocationResultsCard extends StatelessWidget {
             ),
         ],
       ),
-    );
-  }
-}
-
-enum _PhotoOutcome { found, permission, failed }
-
-/// Photos on this phone matching the request, read through the existing gallery service with
-/// whatever access the OS gives. Only small thumbnails are shown; nothing is uploaded.
-class PhotoResultsCard extends StatefulWidget {
-  const PhotoResultsCard({super.key, required this.query, required this.results});
-
-  final ChatLookupQuery query;
-  final ChatResultContext results;
-
-  @override
-  State<PhotoResultsCard> createState() => _PhotoResultsCardState();
-}
-
-class _PhotoResultsCardState extends State<PhotoResultsCard> {
-  late final Future<(_PhotoOutcome, List<PhotoItem>)> _matches = _search();
-
-  Future<(_PhotoOutcome, List<PhotoItem>)> _search() async {
-    final gallery = widget.results.galleryService;
-    // A status check only: chat never shows a permission dialog.
-    if (!(await gallery.permissionStatus()).isUsable) return (_PhotoOutcome.permission, const <PhotoItem>[]);
-
-    final start = widget.query.start?.toLocal();
-    final end = widget.query.end?.toLocal();
-    DateTimeRange? range;
-    if (start != null && end != null && end.isAfter(start)) {
-      // The gallery's range end is a whole day; the exact bounds are applied below.
-      range = DateTimeRange(
-        start: start,
-        end: DateUtils.dateOnly(end.subtract(const Duration(microseconds: 1))),
-      );
-    }
-    try {
-      final page = await gallery.loadPage(0, range: range);
-      final text = widget.query.text?.toLowerCase();
-      final matches = page.where((p) {
-        if (start != null && p.createdAt.isBefore(start)) return false;
-        if (end != null && !p.createdAt.isBefore(end)) return false;
-        if (text != null && p.name != null && !p.name!.toLowerCase().contains(text)) return false;
-        return true;
-      });
-      return (_PhotoOutcome.found, matches.take(widget.query.limit ?? 12).toList());
-    } on PhotoGalleryException {
-      return (_PhotoOutcome.failed, const <PhotoItem>[]);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return FutureBuilder(
-      future: _matches,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done) {
-          return const Padding(padding: EdgeInsets.all(8), child: LinearProgressIndicator());
-        }
-        final (outcome, photos) = snapshot.data ?? (_PhotoOutcome.failed, const <PhotoItem>[]);
-        if (outcome == _PhotoOutcome.permission) {
-          return PermissionRequiredCard(
-            permission: ChatPermission.photos,
-            kind: ChatToolKind.photos,
-            onOpenPermissions: widget.results.onOpenPermissions,
-          );
-        }
-        if (outcome == _PhotoOutcome.failed || photos.isEmpty) {
-          return InfoBanner(
-            icon: Icons.image_search_rounded,
-            title: outcome == _PhotoOutcome.failed ? "I couldn't read your photos." : 'No matching photos on this phone.',
-            message: const Text('Try a different date or check the Photos screen.'),
-          );
-        }
-        final l10n = MaterialLocalizations.of(context);
-        return AppCard(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(photos.length == 1 ? '1 photo found' : '${photos.length} photos found', style: theme.textTheme.titleSmall),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final photo in photos)
-                    SizedBox(
-                      width: 84,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          SizedBox(
-                            width: 84,
-                            height: 84,
-                            child: PhotoThumbnail(
-                              photo: photo,
-                              galleryService: widget.results.galleryService,
-                              onTap: () => widget.results.onOpenPhoto(photo),
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            l10n.formatShortMonthDay(photo.createdAt.toLocal()),
-                            style: theme.textTheme.labelSmall,
-                          ),
-                        ],
-                      ),
-                    ),
-                ],
-              ),
-            ],
-          ),
-        );
-      },
     );
   }
 }

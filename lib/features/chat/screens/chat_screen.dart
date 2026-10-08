@@ -77,6 +77,7 @@ class _ChatScreenState extends State<ChatScreen> {
     service: widget.chatService,
     handoff: widget.messageHandoff,
     documents: widget.documentService,
+    photos: widget.galleryService,
   );
   final _input = TextEditingController();
   final _focus = FocusNode();

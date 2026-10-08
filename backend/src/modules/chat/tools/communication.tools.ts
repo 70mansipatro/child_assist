@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { ChatActionChannel, ChatActionType, PermissionType } from "../../../../generated/prisma/client";
-import { HISTORY_PERIODS, isLocalDate } from "../../../lib/local-dates";
+import { HISTORY_PERIODS, isLocalDate, localDateOf, localTimeOf } from "../../../lib/local-dates";
 import { emailConfigured, isSafeSubject, isValidEmail, MAX_EMAIL_BODY_LENGTH } from "../actions/email.service";
 import { normalizePhone, preparePendingAction, type ActionDraft } from "../actions/pending-actions";
 import { buildSharedLocations, resolveShareRange, type ShareKind } from "../actions/share-content";
+import { currentPhoto } from "../photos/photo-references";
 import { defineChatTool, hasPermission, permissionRequired } from "./define-tool";
 import { chatProviders } from "./providers";
 import { fail, ok, type ToolContext, type ToolResult } from "./types";
@@ -94,6 +95,7 @@ async function draftFor(
     documentName?: string;
     shareDocument?: boolean;
     shareContactNumber?: string;
+    sharePhoto?: boolean;
   } & ShareInput,
 ): Promise<ToolResult<ActionDraft>> {
   const sharesDocument = content.shareDocument === true || !!content.documentName;
@@ -103,6 +105,37 @@ async function draftFor(
   // A name is looked up in the phone's contacts, which needs the Contacts permission.
   if ((!recipient.address || content.shareContactNumber) && !(await hasPermission(ctx.userId, PermissionType.CONTACTS))) {
     return permissionRequired(PermissionType.CONTACTS);
+  }
+
+  if (content.sharePhoto) {
+    if (content.share || sharesDocument || content.shareContactNumber) {
+      return fail("INVALID_ARGUMENTS", "Share either a photo, locations, a document or a contact's number, not several.");
+    }
+    if (!(await hasPermission(ctx.userId, PermissionType.PHOTOS))) return permissionRequired(PermissionType.PHOTOS);
+    // Only the photo being talked about in this chat, owned by this user: the model never names a file.
+    const current = await currentPhoto(ctx.userId, ctx.conversationId);
+    if (current.status !== "selected") {
+      return fail(
+        "NO_PHOTO_SELECTED",
+        current.status === "choosing"
+          ? "Several photos were shown; ask the user to tap the one they want to send first. Nothing was prepared."
+          : "No photo has been shown in this chat yet. Find it first with get_photo_candidates. Nothing was prepared.",
+      );
+    }
+    const taken = current.photo.capturedAt;
+    return ok({
+      type: ChatActionType.SHARE_PHOTO,
+      channel,
+      contactQuery: recipient.address ? null : (recipient.name ?? null),
+      recipientName: recipient.name ?? null,
+      recipientAddress: recipient.address ?? null,
+      subject: null,
+      message: content.message?.trim() ?? "",
+      dataSummary: `Photo taken ${localDateOf(taken, ctx.zone)} at ${localTimeOf(taken, ctx.zone)}`,
+      documentQuery: null,
+      sharedContactQuery: null,
+      photoId: current.photo.id,
+    });
   }
 
   if (content.shareContactNumber) {
@@ -122,6 +155,7 @@ async function draftFor(
       dataSummary: null,
       documentQuery: null,
       sharedContactQuery: content.shareContactNumber,
+      photoId: null,
     });
   }
 
@@ -167,8 +201,16 @@ async function draftFor(
     dataSummary,
     documentQuery: content.documentName || null,
     sharedContactQuery: null,
+    photoId: null,
   });
 }
+
+const photosByEmailUnsupported = fail(
+  "NOT_SUPPORTED",
+  "Photos stay on the user's phone and Child Assist cannot attach them to an email, so nothing was prepared " +
+    "and nothing was sent. Tell the user that plainly, and offer to share the photo on WhatsApp instead, or with " +
+    "the Share button on the photo (which lets them pick their email app).",
+);
 
 const documentsByEmailUnsupported = fail(
   "NOT_SUPPORTED",
@@ -253,16 +295,18 @@ export function communicationTools(ctx: ToolContext) {
           .describe("The email text. For 'ye details', write the details from this conversation."),
         documentName: z.string().trim().max(120).optional().describe("Not supported for email"),
         shareDocument: z.boolean().optional().describe("Not supported for email"),
+        sharePhoto: z.boolean().optional().describe("Not supported for email"),
         ...shareContactField,
         ...shareFields,
       }),
       selfAudited: true,
       execute: async (
-        { recipientName, recipientEmail, subject, message, documentName, shareDocument, shareContactNumber, ...share },
+        { recipientName, recipientEmail, subject, message, documentName, shareDocument, sharePhoto, shareContactNumber, ...share },
         toolCtx,
       ) => {
-        // Checked first: whatever the configuration, a document is never attached to an email.
+        // Checked first: whatever the configuration, a document or photo is never attached to an email.
         if (documentName || shareDocument) return documentsByEmailUnsupported;
+        if (sharePhoto) return photosByEmailUnsupported;
         if (!emailConfigured()) {
           return fail("ACTION_NOT_CONFIGURED", "Sending email is not set up on the Child Assist server. Nothing was prepared.");
         }
@@ -313,12 +357,19 @@ export function communicationTools(ctx: ToolContext) {
           .boolean()
           .optional()
           .describe("true to share a document the user did not name ('send the document to Papa'); the user picks it"),
+        sharePhoto: z
+          .boolean()
+          .optional()
+          .describe(
+            "true to send the photo being talked about in this chat ('send this photo to Papa on WhatsApp'). The " +
+              "server attaches exactly that photo; find it first with get_photo_candidates if none was shown.",
+          ),
         ...shareContactField,
         ...shareFields,
       }),
       selfAudited: true,
       execute: async (
-        { recipientName, recipientPhone, message, documentName, shareDocument, shareContactNumber, ...share },
+        { recipientName, recipientPhone, message, documentName, shareDocument, sharePhoto, shareContactNumber, ...share },
         toolCtx,
       ) => {
         let phone: string | undefined;
@@ -330,6 +381,7 @@ export function communicationTools(ctx: ToolContext) {
           message,
           documentName,
           shareDocument,
+          sharePhoto,
           shareContactNumber,
           ...share,
         });

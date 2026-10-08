@@ -679,6 +679,17 @@ class FakeBackend {
       // A question about a document opens a read request, as on the real server.
       for (final event in reply.toolEvents) {
         final data = event['data'];
+        if (event['kind'] == 'photos' && data is Map && data['requestId'] is String) {
+          photoSearchStore[data['requestId'] as String] = {'userId': userId, 'conversationId': conversation['id'], 'status': 'PENDING'};
+        }
+        if (event['kind'] == 'photo_analysis' && data is Map && data['requestId'] is String) {
+          photoAnalysisStore[data['requestId'] as String] = {
+            'userId': userId,
+            'conversationId': conversation['id'],
+            'status': 'PENDING',
+            'photoId': data['photoId'],
+          };
+        }
         if (event['kind'] == 'document_text' && data is Map && data['requestId'] is String) {
           documentReadStore[data['requestId'] as String] = {
             'userId': userId,
@@ -732,12 +743,127 @@ class FakeBackend {
     if (read != null && req.method == 'POST') {
       return _handleDocumentRead(read.group(1)!, read.group(2)!, req.body.isEmpty ? {} : jsonDecode(req.body), userId);
     }
+    final search = RegExp(r'^/api/chat/photo-searches/([^/]+)/results$').firstMatch(path);
+    if (search != null && req.method == 'POST') {
+      return _handlePhotoSearch(search.group(1)!, req.body.isEmpty ? {} : jsonDecode(req.body), userId);
+    }
+    final select = RegExp(r'^/api/chat/photos/([^/]+)/select$').firstMatch(path);
+    if (select != null && req.method == 'POST') {
+      final photo = photoStore[select.group(1)];
+      photoCalls.add('select ${select.group(1)}');
+      if (photo == null || photo['userId'] != userId) return _json(404, {'message': 'Photo not found'});
+      photo['selected'] = true;
+      return _json(200, {'photo': {'id': select.group(1), 'selected': true}});
+    }
+    final analysis = RegExp(r'^/api/chat/photo-analyses/([^/]+)/(answer|fail)$').firstMatch(path);
+    if (analysis != null && req.method == 'POST') {
+      return _handlePhotoAnalysis(analysis.group(1)!, analysis.group(2)!, req.body.isEmpty ? {} : jsonDecode(req.body), userId);
+    }
     final action =
         RegExp(r'^/api/chat/actions/([^/]+)/(recipient|shared-contact|document|confirm|cancel|handoff)$').firstMatch(path);
     if (action != null && req.method == 'POST') {
       return _handleAction(action.group(1)!, action.group(2)!, req.body.isEmpty ? {} : jsonDecode(req.body), userId);
     }
     return _json(404, {'message': 'Not found'});
+  }
+
+  /// Photo searches and analyses opened by chat turns, and the photos the phone reported, by id.
+  final Map<String, Map<String, dynamic>> photoSearchStore = {};
+  final Map<String, Map<String, dynamic>> photoAnalysisStore = {};
+  final Map<String, Map<String, dynamic>> photoStore = {};
+
+  /// Every photo call ("results r1 found", "select photo_...", "answer a1", "fail a1 unavailable"),
+  /// and every body the phone sent for searches and analyses.
+  final List<String> photoCalls = [];
+  final List<Map<String, dynamic>> photoBodies = [];
+
+  /// The image bytes the phone sent for each analysis, in order.
+  final List<Uint8List> analysedImages = [];
+
+  /// Answers from the image the phone sent, like Gemini vision would from the real image. The
+  /// default names the image's size, so tests can tell the answer came from that image.
+  String Function(Uint8List image) photoAnswerer = (image) => 'This photo shows an image of ${image.length} bytes.';
+
+  /// When true, the vision model fails like Vertex AI being down.
+  bool photoVisionFails = false;
+
+  int _nextPhotoId = 1;
+
+  Map<String, dynamic> _note(String userId, String conversationId, String content) {
+    final m = {'id': 'm${_nextChatId++}', 'role': 'CHAT_ASSISTANT', 'content': content, 'createdAt': _tick()};
+    final conversation = chats[userId]!.firstWhere((c) => c['id'] == conversationId);
+    (conversation['messages'] as List<Map<String, dynamic>>).add(m);
+    return m;
+  }
+
+  /// Like the server: only metadata of shown photos (never a path, URI or file name), owner only,
+  /// answered once; each shown photo gets an opaque id.
+  http.Response _handlePhotoSearch(String id, Map<String, dynamic> body, String userId) {
+    photoCalls.add('results $id ${body['outcome']}');
+    photoBodies.add(body);
+    final r = photoSearchStore[id];
+    if (r == null || r['userId'] != userId) return _json(404, {'message': 'Request not found'});
+    const allowed = {'outcome', 'photos', 'total', 'reason', 'limited', 'conversationId'};
+    const photoKeys = {'capturedAt', 'width', 'height', 'place'};
+    final photos = (body['photos'] as List? ?? const []).cast<Map<String, dynamic>>();
+    if (body.keys.any((k) => !allowed.contains(k)) || photos.any((p) => p.keys.any((k) => !photoKeys.contains(k)))) {
+      return _json(400, {'message': 'Validation failed'});
+    }
+    if (r['status'] != 'PENDING') return _json(409, {'message': 'This request has already been handled.'});
+    r['status'] = 'COMPLETED';
+    final ids = <String>[];
+    for (var i = 0; i < photos.length; i++) {
+      final photoId = 'photo_${(_nextPhotoId++).toRadixString(16).padLeft(20, '0')}';
+      photoStore[photoId] = {'userId': userId, 'conversationId': r['conversationId'], 'selected': photos.length == 1};
+      ids.add(photoId);
+    }
+    final note = switch (body['outcome']) {
+      'found' when photos.length == 1 => 'I found a matching photo.',
+      'found' => 'I found ${photos.length} matching photos. Which one would you like?',
+      'permission_denied' => "I can't access your photos because Photos permission is turned off.",
+      'failed' => "I couldn't read the photos on your phone right now. Please try again.",
+      _ => "I couldn't find a matching photo in your available photos.",
+    };
+    return _json(200, {
+      'photos': [for (final i in ids) {'id': i, 'selected': photos.length == 1}],
+      'message': _note(userId, r['conversationId'] as String, note),
+    });
+  }
+
+  http.Response _handlePhotoAnalysis(String id, String verb, Map<String, dynamic> body, String userId) {
+    photoCalls.add(verb == 'fail' ? 'fail $id ${body['reason']}' : 'answer $id');
+    photoBodies.add(body);
+    final r = photoAnalysisStore[id];
+    if (r == null || r['userId'] != userId) return _json(404, {'message': 'Request not found'});
+    if (r['status'] != 'PENDING') return _json(409, {'message': 'This request has already been handled.'});
+    final conversationId = r['conversationId'] as String;
+    if (verb == 'fail') {
+      const messages = {
+        'not_found': "I couldn't find that photo on your phone, so I couldn't look at it.",
+        'unavailable': 'This photo is no longer available on your device.',
+        'permission': "I can't access your photos because Photos permission is turned off.",
+        'unsupported': "I can't read this type of image.",
+        'too_large': 'This image is too large for me to look at.',
+        'cancelled': "Okay, I didn't look at the photo.",
+      };
+      r['status'] = 'FAILED';
+      return _json(200, {'message': _note(userId, conversationId, messages[body['reason']] ?? '')});
+    }
+    const allowed = {'photoId', 'image', 'conversationId'};
+    if (body.keys.any((k) => !allowed.contains(k)) || body['photoId'] != r['photoId'] || body['image'] is! String) {
+      return _json(400, {'message': 'Validation failed'});
+    }
+    if (photoVisionFails) {
+      r['status'] = 'FAILED';
+      return _json(503, {
+        'message': "Sorry, I couldn't look at the photo right now. Please try again in a moment.",
+        'code': 'AI_UNAVAILABLE',
+      });
+    }
+    final image = base64Decode(body['image'] as String);
+    analysedImages.add(image);
+    r['status'] = 'COMPLETED';
+    return _json(200, {'message': _note(userId, conversationId, photoAnswerer(image))});
   }
 
   /// Read requests opened by document questions, by id.
@@ -920,6 +1046,7 @@ class FakeBackend {
           'message': a['message'] ?? '',
           'documentQuery': a['documentQuery'],
           'documentId': a['documentId'],
+          'photoId': a['photoId'],
         });
       case 'cancel':
         if (a['status'] != 'PENDING' && a['status'] != 'CONFIRMED') return _json(409, handled);
@@ -929,6 +1056,11 @@ class FakeBackend {
         if (a['status'] != 'CONFIRMED' || email) return _json(409, handled);
         if (result == 'unavailable') return view("WhatsApp isn't available on this device.");
         a['status'] = 'COMPLETED';
+        if (a['type'] == 'SHARE_PHOTO') {
+          return view(result == 'whatsapp_opened'
+              ? 'WhatsApp opened. Tap Send to complete it.'
+              : 'Share options opened. Nothing is sent until you send the photo from the app you choose.');
+        }
         if (document) {
           return view(result == 'whatsapp_opened'
               ? 'WhatsApp opened. Please tap Send to send the document.'
@@ -1032,6 +1164,11 @@ class FakePermissionService extends PermissionService {
     settingsOpened++;
     return true;
   }
+
+  int mediaLocationRequests = 0;
+
+  @override
+  Future<void> requestMediaLocation() async => mediaLocationRequests++;
 
   /// "Allow all the time" location: the OS state, and what the user picks when asked.
   PermissionState backgroundLocation = PermissionState.denied;
@@ -1233,16 +1370,45 @@ class FakePhotoLibrary implements PhotoLibrary {
     return matching.skip(page * pageSize).take(pageSize).toList();
   }
 
+  /// GPS positions stored in photos (by id). Photos not listed have none, as on a real phone.
+  final Map<String, PhotoPosition> positions = {};
+
+  /// Photos deleted from the phone after they were listed.
+  final Set<String> deleted = {};
+
+  /// Every GPS read, by photo id.
+  final List<String> locationReads = [];
+
+  /// Every private share reference handed out, by photo id.
+  final List<String> shareReferenceReads = [];
+
+  /// The private reference this fake hands out for [id] (a content URI on a real phone).
+  static String referenceFor(String id) => 'content://media/external/images/media/$id';
+
   @override
   Future<Uint8List?> image(String id, int width, int height) async {
     imageReads.add('$id ${width}x$height');
+    if (deleted.contains(id)) return null;
     return _png;
   }
 
   @override
   Future<PhotoItem?> details(String id) async {
+    if (deleted.contains(id)) return null;
     final photo = photos.where((p) => p.id == id).firstOrNull;
     return photo?.withDetails(fileSize: 2457600);
+  }
+
+  @override
+  Future<PhotoPosition?> location(String id) async {
+    locationReads.add(id);
+    return positions[id];
+  }
+
+  @override
+  Future<String?> shareReference(String id) async {
+    shareReferenceReads.add(id);
+    return deleted.contains(id) ? null : referenceFor(id);
   }
 
   @override

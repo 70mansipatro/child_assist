@@ -3,13 +3,12 @@ import { PermissionType } from "../../../../generated/prisma/client";
 import { redactSecrets } from "../ai/redact";
 import { prepareDocumentRead } from "../documents/document-reads";
 import { defineChatTool } from "./define-tool";
-import { isoDateTime } from "./location.tools";
 import { chatProviders, type DeviceDocument } from "./providers";
 import { fail, ok, type ToolContext } from "./types";
 
-// Photos and documents stay on the phone (Phases 5 and 6). These tools only ever see what the OS
-// lets the app access, return metadata (never file paths or image bytes), and report honestly
-// when the device cannot be reached.
+// Documents stay on the phone (Phase 6). These tools only ever see what the OS lets the app
+// access, return metadata (never file paths or contents), and report honestly when the device
+// cannot be reached. Photos have their own tools (photo.tools.ts).
 
 const MAX_RESULTS = 30;
 // Enough for a useful answer without pushing a whole book into the model.
@@ -24,7 +23,7 @@ const DEVICE_UNAVAILABLE = fail(
 );
 
 /**
- * Without a device gateway, photo and document searches are handed to the app: it runs the
+ * Without a device gateway, document searches are handed to the app: it runs the
  * search on the phone, against only what the OS lets it access, and shows the matches to the
  * user directly. Nothing about the files reaches the backend or Gemini.
  */
@@ -65,44 +64,6 @@ function documentView(d: DeviceDocument) {
 
 export function deviceTools(ctx: ToolContext) {
   return {
-    search_photos: defineChatTool(ctx, {
-      name: "search_photos",
-      kind: "photos",
-      display: deviceDisplay,
-      description:
-        "Search photo metadata (name, date, type, size) in the photos the user allowed the app " +
-        "to access. Never returns the images themselves.",
-      inputSchema: z.strictObject({
-        text: z.string().trim().max(100).optional().describe("Text the file name should contain"),
-        startDate: isoDateTime("startDate").optional(),
-        endDate: isoDateTime("endDate").optional(),
-        limit: z.number().int().min(1).max(MAX_RESULTS).optional(),
-      }),
-      permission: PermissionType.PHOTOS,
-      execute: async ({ text, startDate, endDate, limit }, { userId }) => {
-        const device = chatProviders().device;
-        if (!device.available) return onDevice({ text: text || null, startDate: startDate ?? null, endDate: endDate ?? null, limit: limit ?? 12 });
-        const photos = await device.searchPhotos(userId, {
-          text: text || undefined,
-          since: startDate ? new Date(startDate) : undefined,
-          before: endDate ? new Date(endDate) : undefined,
-          limit: limit ?? 10,
-        });
-        return ok({
-          photos: photos.slice(0, MAX_RESULTS).map((p) => ({
-            id: p.id,
-            name: p.name ?? null,
-            takenAt: p.createdAt.toISOString(),
-            modifiedAt: p.modifiedAt?.toISOString() ?? null,
-            mimeType: p.mimeType ?? null,
-            sizeBytes: p.fileSize ?? null,
-            width: p.width ?? null,
-            height: p.height ?? null,
-          })),
-        });
-      },
-    }),
-
     search_documents: defineChatTool(ctx, {
       name: "search_documents",
       kind: "documents",

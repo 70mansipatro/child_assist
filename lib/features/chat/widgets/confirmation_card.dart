@@ -4,6 +4,7 @@ import '../../../core/widgets/widgets.dart';
 import '../../contacts/models/contact_item.dart';
 import '../../contacts/services/contact_service.dart';
 import '../models/chat_message.dart';
+import '../../photos/widgets/photo_grid.dart' show PhotoThumbnail;
 import 'contact_result_card.dart';
 import 'tool_result_cards.dart';
 
@@ -48,7 +49,9 @@ class _ActionConfirmationCardState extends State<ActionConfirmationCard> {
           icon: Icons.chat_bubble_outline_rounded,
           title: "WhatsApp isn't available on this device.",
           message: Text(
-            action.isDocumentShare
+            action.isPhotoShare
+                ? 'You can share the photo another way instead. Nothing has been shared.'
+                : action.isDocumentShare
                 ? 'You can share the document another way instead. Nothing has been shared.'
                 : 'You can share the message another way instead. Nothing has been sent.',
           ),
@@ -132,6 +135,11 @@ class _ActionConfirmationCardState extends State<ActionConfirmationCard> {
           Text('Recipient', style: theme.textTheme.labelMedium),
           const SizedBox(height: 4),
         ],
+        if (action.isPhotoShare) ...[
+          _PhotoField(action: action, results: widget.results),
+          Text('Recipient', style: theme.textTheme.labelMedium),
+          const SizedBox(height: 4),
+        ],
         if (action.isContactShare) ...[
           Text('Send to', style: theme.textTheme.labelMedium),
           const SizedBox(height: 4),
@@ -187,15 +195,20 @@ class _ActionConfirmationCardState extends State<ActionConfirmationCard> {
     final long = message != null && (message.length > 400 || '\n'.allMatches(message).length > 8);
 
     final document = action.isDocumentShare;
+    final photo = action.isPhotoShare;
     return [
       if (document) ...[
         _Field(label: 'Document', value: _documentLabel(action), highlight: true),
         _Field(label: 'Recipient', value: to),
         const _Field(label: 'Method', value: 'WhatsApp'),
+      ] else if (photo) ...[
+        _PhotoField(action: action, results: widget.results),
+        _Field(label: 'Recipient', value: to),
+        const _Field(label: 'Method', value: 'WhatsApp'),
       ] else
         _Field(label: 'To', value: to),
       if (action.subject != null) _Field(label: 'Subject', value: action.subject!),
-      if (action.dataSummary != null && !document)
+      if (action.dataSummary != null && !document && !photo)
         _Field(label: action.isWhatsApp ? 'Information' : 'Data', value: action.dataSummary!, highlight: true),
       if (message != null && message.isNotEmpty) ...[
         _Field(label: 'Message', value: message, maxLines: long && !_showFullMessage ? 8 : null),
@@ -215,6 +228,7 @@ class _ActionConfirmationCardState extends State<ActionConfirmationCard> {
           PendingActionState.handingOff => 'Opening WhatsApp...',
           PendingActionState.cancelling => 'Cancelling...',
           _ when document => 'WhatsApp will open with this document ready. You tap Send in WhatsApp.',
+          _ when photo => 'WhatsApp will open with this photo ready. You tap Send in WhatsApp.',
           _ =>
             action.isWhatsApp
                 ? 'WhatsApp will open with this ready. You send it from WhatsApp.'
@@ -233,7 +247,7 @@ class _ActionConfirmationCardState extends State<ActionConfirmationCard> {
             onPressed: busy ? null : () => widget.results.onConfirmAction(action.id),
             child: action.state == PendingActionState.confirming || action.state == PendingActionState.handingOff
                 ? ButtonSpinner(size: 16, color: theme.colorScheme.onPrimary)
-                : Text(document ? 'Confirm' : action.isWhatsApp ? 'Continue to WhatsApp' : 'Confirm & Send'),
+                : Text(document || photo ? 'Confirm' : action.isWhatsApp ? 'Continue to WhatsApp' : 'Confirm & Send'),
           ),
         ],
       ),
@@ -516,6 +530,53 @@ class _ManualEmailEntryState extends State<ManualEmailEntry> {
           ],
         ),
       ],
+    );
+  }
+}
+
+/// The photo a SHARE_PHOTO action shares: the one shown in this chat, as the server recorded it.
+class _PhotoField extends StatelessWidget {
+  const _PhotoField({required this.action, required this.results});
+
+  final PendingAction action;
+  final ChatResultContext results;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final photo = action.photoId == null ? null : results.session.photo(action.photoId!);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          if (photo != null) ...[
+            SizedBox(
+              width: 56,
+              height: 56,
+              child: PhotoThumbnail(
+                photo: photo.item,
+                galleryService: results.galleryService,
+                onTap: () => results.onOpenPhoto(photo.item),
+              ),
+            ),
+            const SizedBox(width: 10),
+          ],
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Photo', style: theme.textTheme.labelMedium),
+                Text(
+                  photo != null
+                      ? photoDateLabel(context, photo.item.createdAt)
+                      : action.dataSummary ?? 'The photo shown in this chat',
+                  style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

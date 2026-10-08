@@ -456,7 +456,6 @@ describe("chat API: tools and permissions", () => {
     const gateway: DeviceGateway = {
       available: true,
       getCurrentLocation: async () => null,
-      searchPhotos: async () => [],
       searchDocuments: async (userId) => {
         askedFor.push(userId);
         return docs;
@@ -491,43 +490,30 @@ describe("chat API: tools and permissions", () => {
     assert.ok(askedFor.length > 0 && askedFor.every((id) => id === userA.id), "the device is only asked for the JWT user");
   });
 
-  test("photo tool: permission and metadata only", async () => {
+  test("photo tool: permission checked, the search is handed to the phone without any photo data", async () => {
     await setPermission(userA, PermissionType.PHOTOS, PermissionStatus.DENIED);
-    setChatModels({ chat: toolEcho("search_photos", { text: "IMG" }) });
+    setChatModels({ chat: toolEcho("get_photo_candidates", { fileName: "IMG" }) });
     let res = await chat(userA, { message: "Show my photos from the trip" });
     assert.match(res.json.response, /"permission":"PHOTOS"/);
 
     await setPermission(userA, PermissionType.PHOTOS, PermissionStatus.LIMITED);
-    setChatModels({ chat: toolEcho("search_photos", { startDate: "2026-10-05T00:00:00+05:30", endDate: "2026-10-06T00:00:00+05:30" }) });
-    res = await chat(userA, { message: "Find photos from yesterday" });
-    assert.deepEqual(res.json.toolEvents, [
-      {
-        kind: "photos",
-        status: "device_lookup",
-        data: { query: { text: null, startDate: "2026-10-05T00:00:00+05:30", endDate: "2026-10-06T00:00:00+05:30", limit: 12 } },
-      },
-    ]);
-
-    setChatModels({ chat: toolEcho("search_photos", { text: "IMG" }) });
-    configureChatProviders({
-      device: {
-        available: true,
-        getCurrentLocation: async () => null,
-        searchDocuments: async () => [],
-        readDocument: async () => null,
-        searchPhotos: async () => [
-          Object.assign(
-            { id: "p1", name: "IMG_0001.jpg", mimeType: "image/jpeg", fileSize: 2048, width: 4000, height: 3000, createdAt: new Date("2026-09-10T08:00:00Z") },
-            { path: "/storage/emulated/0/DCIM/IMG_0001.jpg", bytes: "iVBORw0KGgo=" },
-          ),
-        ],
-      },
+    setChatModels({ chat: toolEcho("get_photo_candidates", { startDate: "2026-10-05" }) });
+    res = await chat(userA, { message: "Find photos from 5 October" });
+    assert.equal(res.json.toolEvents.length, 1);
+    const [event] = res.json.toolEvents;
+    assert.equal(event.kind, "photos");
+    assert.equal(event.status, "device_lookup");
+    assert.match(event.data.requestId, /^[a-z0-9]{20,40}$/);
+    assert.deepEqual(event.data.query, {
+      fileName: null,
+      visualHint: null,
+      startDate: "2026-10-05T00:00:00.000Z",
+      endDate: "2026-10-06T00:00:00.000Z",
+      locationContext: false,
+      latest: false,
     });
-    res = await chat(userA, { message: "Show my photos from the trip" });
-    const result = JSON.parse(res.json.response.replace(/^RESULT /, ""));
-    assert.equal(result.data.photos[0].name, "IMG_0001.jpg");
-    assert.equal(result.data.photos[0].takenAt, "2026-09-10T08:00:00.000Z");
-    assert.doesNotMatch(res.raw, /DCIM|iVBORw0KGgo/, "no file paths or image data");
+    assert.deepEqual(event.data.visits, []);
+    assert.doesNotMatch(res.raw, /content:\/\/|\/storage\/|DCIM/, "no paths or URIs");
   });
 
   test("web search reports that it is not configured instead of inventing data", async () => {

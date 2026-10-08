@@ -114,3 +114,52 @@ export const actionHandoffSchema = z.strictObject({
   conversationId: id.optional(),
   result: z.enum(["whatsapp_opened", "share_opened", "unavailable"]),
 });
+
+// Photos. Only the server's opaque photo ids (photo_...) ever travel: never a path, a content URI,
+// a device asset id or a file name. Strict: a userId (or anything else) in the body is rejected.
+
+export const photoIdSchema = z.string({ error: "photoId is required" }).regex(/^photo_[a-f0-9]{20}$/, "Invalid photo id");
+
+export const photoParamsSchema = z.strictObject({ photoId: photoIdSchema });
+
+/** One photo the phone SHOWED for a search: when it was taken, its size, and the matched place. */
+const shownPhotoSchema = z.strictObject({
+  capturedAt: z.iso.datetime({ offset: true }).transform((s) => new Date(s)),
+  width: z.number().int().min(1).max(100_000).optional(),
+  height: z.number().int().min(1).max(100_000).optional(),
+  place: z
+    .strictObject({
+      // The user's own saved place name, echoed into the chat history: one short line, no markup.
+      name: z.string().trim().min(1).max(120).regex(/^[^\u0000-\u001f\u007f<>"]+$/, "Invalid place name"),
+      evidence: z.enum(["gps", "time"]),
+    })
+    .optional(),
+});
+
+export const photoSearchResultSchema = z.strictObject({
+  conversationId: id.optional(),
+  outcome: z.enum(["found", "none", "permission_denied", "failed"]),
+  photos: z.array(shownPhotoSchema).max(12).default([]),
+  total: z.number().int().min(0).max(100_000).optional(),
+  reason: z.enum(["no_visits", "content_only", "no_name_match"]).optional(),
+  limited: z.boolean().optional(),
+});
+
+/** Largest base64 image accepted in a body (the decoded image is limited to 5 MB). */
+export const MAX_IMAGE_BASE64 = 7_000_000;
+
+/** The ONE photo the phone sends for an analysis request: its opaque id and the image itself. */
+export const photoAnalysisAnswerSchema = z.strictObject({
+  conversationId: id.optional(),
+  photoId: photoIdSchema,
+  image: z
+    .string({ error: "image is required" })
+    .min(1)
+    .max(MAX_IMAGE_BASE64, "image is too large")
+    .regex(/^[A-Za-z0-9+/]+={0,2}$/, "image must be base64"),
+});
+
+export const photoAnalysisFailSchema = z.strictObject({
+  conversationId: id.optional(),
+  reason: z.enum(["not_found", "unavailable", "permission", "unsupported", "too_large", "cancelled"]),
+});

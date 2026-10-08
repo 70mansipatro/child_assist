@@ -1,3 +1,7 @@
+import 'chat_photo.dart';
+
+export 'chat_photo.dart';
+
 /// Who wrote a message. Only these two are shown; the server's system/tool records never are.
 enum ChatRole { user, assistant }
 
@@ -83,6 +87,12 @@ enum ChatToolKind {
   locationHistory,
   currentLocation,
   photos,
+
+  /// Looking at the one photo being talked about (Gemini vision, via this phone).
+  photoAnalysis,
+
+  /// Sharing a photo from this phone, after the user confirms.
+  photoShare,
   documents,
   documentText,
   webSearch,
@@ -96,6 +106,8 @@ enum ChatToolKind {
         'location_history' => locationHistory,
         'current_location' => currentLocation,
         'photos' => photos,
+        'photo_analysis' => photoAnalysis,
+        'photo_share' => photoShare,
         'documents' => documents,
         'document_text' => documentText,
         'web_search' => webSearch,
@@ -160,6 +172,9 @@ class ChatToolEvent {
     this.locations = const [],
     this.query = const ChatLookupQuery(),
     this.requestId,
+    this.photoSearch,
+    this.photoId,
+    this.shareToWhatsApp = false,
   });
 
   final ChatToolKind kind;
@@ -175,11 +190,24 @@ class ChatToolEvent {
   /// For a [ChatToolStatus.deviceLookup]: what to search for on this phone.
   final ChatLookupQuery query;
 
+  /// For a photo search on this phone: what to look for, and the user's own saved places.
+  final PhotoSearchQuery? photoSearch;
+
+  /// The server's opaque id of the photo a tool is about (photo_...): to show again, analyse or
+  /// share. Never a path or URI.
+  final String? photoId;
+
+  /// For a photo share: open WhatsApp rather than the share sheet.
+  final bool shareToWhatsApp;
+
   factory ChatToolEvent.fromJson(Map<String, dynamic> json) {
     final data = json['data'] is Map<String, dynamic> ? json['data'] as Map<String, dynamic> : const {};
     final rawLocations = data['locations'];
+    final kind = ChatToolKind.parse(json['kind']);
+    final photo = data['photo'] is Map<String, dynamic> ? data['photo'] as Map<String, dynamic> : null;
+    final photoId = data['photoId'] ?? photo?['id'];
     return ChatToolEvent(
-      kind: ChatToolKind.parse(json['kind']),
+      kind: kind,
       status: ChatToolStatus.parse(json['status']),
       permission: ChatPermission.parse(json['permission']),
       locations: rawLocations is List
@@ -189,6 +217,11 @@ class ChatToolEvent {
           ? ChatLookupQuery.fromJson(data['query'] as Map<String, dynamic>)
           : const ChatLookupQuery(),
       requestId: data['requestId'] is String ? data['requestId'] as String : null,
+      photoSearch: kind == ChatToolKind.photos && data['query'] is Map<String, dynamic>
+          ? PhotoSearchQuery.fromEvent(Map<String, dynamic>.from(data))
+          : null,
+      photoId: photoId is String ? photoId : null,
+      shareToWhatsApp: data['app'] == 'whatsapp',
     );
   }
 }
@@ -330,7 +363,7 @@ enum ActionChannel {
 
 /// What the phone opens after a WhatsApp action was confirmed.
 class ActionHandoff {
-  const ActionHandoff({required this.phone, required this.message, this.documentQuery, this.documentId});
+  const ActionHandoff({required this.phone, required this.message, this.documentQuery, this.documentId, this.photoId});
 
   final String phone;
   final String message;
@@ -338,6 +371,9 @@ class ActionHandoff {
 
   /// For a document share: the document the user confirmed, which is exactly what is shared.
   final String? documentId;
+
+  /// For a photo share: the photo the user confirmed, which is exactly what is shared.
+  final String? photoId;
 
   static ActionHandoff? tryParse(Object? json) {
     if (json is! Map<String, dynamic>) return null;
@@ -348,6 +384,7 @@ class ActionHandoff {
       message: message,
       documentQuery: json['documentQuery'] as String?,
       documentId: json['documentId'] as String?,
+      photoId: json['photoId'] as String?,
     );
   }
 }
@@ -374,6 +411,7 @@ class PendingAction {
     this.sharedContactQuery,
     this.sharedContactName,
     this.sharedContactPhone,
+    this.photoId,
     this.expiresAt,
     this.state = PendingActionState.awaiting,
     this.resultMessage,
@@ -415,6 +453,9 @@ class PendingAction {
   final String? sharedContactQuery;
   final String? sharedContactName;
   final String? sharedContactPhone;
+
+  /// For a photo share: the server's opaque id of the photo shown in this chat.
+  final String? photoId;
   final DateTime? expiresAt;
   final PendingActionState state;
 
@@ -428,6 +469,7 @@ class PendingAction {
   bool get isWhatsApp => channel == ActionChannel.whatsApp;
   bool get isDocumentShare => type == 'SHARE_DOCUMENT';
   bool get isContactShare => type == 'SHARE_CONTACT';
+  bool get isPhotoShare => type == 'SHARE_PHOTO';
 
   /// The document to share still has to be picked on the phone.
   bool get needsDocument => isDocumentShare && documentId == null;
@@ -459,6 +501,7 @@ class PendingAction {
     sharedContactQuery: sharedContactQuery,
     sharedContactName: sharedContactName,
     sharedContactPhone: sharedContactPhone,
+    photoId: photoId,
     expiresAt: expiresAt,
     state: state ?? this.state,
     resultMessage: resultMessage ?? this.resultMessage,
@@ -485,6 +528,7 @@ class PendingAction {
     sharedContactQuery: server.sharedContactQuery,
     sharedContactName: server.sharedContactName,
     sharedContactPhone: server.sharedContactPhone,
+    photoId: server.photoId,
     expiresAt: server.expiresAt,
     state: state,
     resultMessage: resultMessage,
@@ -513,6 +557,7 @@ class PendingAction {
       sharedContactQuery: text('sharedContactQuery'),
       sharedContactName: text('sharedContactName'),
       sharedContactPhone: text('sharedContactPhone'),
+      photoId: text('photoId'),
       expiresAt: DateTime.tryParse(json['expiresAt'] as String? ?? ''),
     );
   }

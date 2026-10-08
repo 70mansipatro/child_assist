@@ -3,6 +3,7 @@ import { accountTools } from "./account.tools";
 import { communicationTools, webTools } from "./communication.tools";
 import { deviceTools } from "./device.tools";
 import { locationTools } from "./location.tools";
+import { photoTools } from "./photo.tools";
 import type { ToolContext } from "./types";
 
 /**
@@ -14,6 +15,7 @@ export function buildChatTools(ctx: ToolContext): ToolSet {
     ...accountTools(ctx),
     ...locationTools(ctx),
     ...deviceTools(ctx),
+    ...photoTools(ctx),
     ...webTools(ctx),
     ...communicationTools(ctx),
   };

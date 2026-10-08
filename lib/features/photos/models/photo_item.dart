@@ -58,3 +58,21 @@ class PhotoItem {
         if (fileSize != null) 'fileSize': fileSize,
       };
 }
+
+/// A GPS position stored in a photo's own metadata.
+class PhotoPosition {
+  const PhotoPosition(this.latitude, this.longitude);
+
+  final double latitude;
+  final double longitude;
+
+  /// A real position, or null for a missing, out-of-range or 0,0 value (which platforms report
+  /// when a photo has no GPS data, or when the OS hides it).
+  static PhotoPosition? tryCreate(double? latitude, double? longitude) {
+    if (latitude == null || longitude == null) return null;
+    if (latitude.isNaN || longitude.isNaN) return null;
+    if (latitude.abs() > 90 || longitude.abs() > 180) return null;
+    if (latitude == 0 && longitude == 0) return null;
+    return PhotoPosition(latitude, longitude);
+  }
+}
