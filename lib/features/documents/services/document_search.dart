@@ -96,8 +96,15 @@ class DocumentSearch {
     'ka', 'ki', 'ke', 'ko', 'wala', 'wali', 'wale', 'bhejo', 'bhej', 'bhejna', 'bhejdo', 'do', 'dedo', 'de',
     'dena', 'dikhao', 'dikha', 'dikhado', 'kholo', 'mera', 'meri', 'mere', 'mujhe', 'muje', 'mujhko', 'hume',
     'humein', 'hamein', 'woh', 'wo', 'vo', 'voh', 'yeh', 'ye', 'chahiye', 'chaiye', 'par', 'pe', 'mein', 'kya',
-    'hai', 'h', 'isme', 'usme', 'batao', 'bata', 'padho', 'padhke',
+    'hai', 'h', 'isme', 'usme', 'batao', 'bata', 'padho', 'padhke', 'dikhana', 'dikhaiye', 'iska', 'iski', 'iske',
+    'uska', 'uski', 'waala', 'waali', 'waale', 'karo', 'kariye', 'karna', 'bare', 'baare', 'dijiye', 'bhejiye',
+    'chahie', 'plz', 'kindly',
   };
+
+  /// The share of the request's meaningful words a document's name must contain to be offered
+  /// at all. Above one half: "Java notes" never offers "Python Notes.pdf" for "notes" alone,
+  /// while a three-word request still finds a name with two of them. The one place to tune it.
+  static const minWordCoverage = 0.5;
 
   static const _typeWords = {
     'pdf': DocumentType.pdf,
@@ -132,19 +139,27 @@ class DocumentSearch {
       }
       final nameWords = DocumentSearch.nameWords(document.name);
       final compact = nameWords.join();
-      var score = 0, matched = 0;
+      var score = 0, matched = 0, typos = 0;
       for (final word in words) {
-        final s = _wordScore(word, nameWords, compact);
+        var s = _wordScore(word, nameWords, compact);
+        if (s == 0 && _nearlyIn(word, nameWords)) {
+          // A one-letter slip ("pyton"): it counts toward coverage but never makes a strong
+          // match on its own, so the user is asked rather than given a guess.
+          s = 1;
+          typos++;
+        }
         if (s > 0) matched++;
         score += s;
       }
       // A partial match is offered only when it has most of the words: "Java notes" must not
       // offer "Python Notes.pdf" just because both say "notes".
-      if (matched * 2 <= words.length) continue;
+      if (matched / words.length <= minWordCoverage) continue;
+      // The name is exactly what was asked for ("Python notes" -> "Python Notes.pdf"): ranked first.
+      final exact = nameWords.length == words.length && matched == words.length && typos == 0;
       found.add(DocumentMatch(
         document,
-        score: score + (typeOk ? 1 : 0),
-        complete: matched == words.length && typeOk,
+        score: score + (typeOk ? 1 : 0) + (exact ? 2 : 0),
+        complete: matched == words.length && typos == 0 && typeOk,
       ));
     }
 
@@ -211,6 +226,30 @@ class DocumentSearch {
     }
     if (best == 0 && word.length >= 3 && compact.contains(word)) best = 1;
     return best;
+  }
+
+  /// Whether [word] is one edit (a letter added, missing or changed) away from a name word.
+  /// Only for longer words, where a slip is unlikely to turn one real word into another.
+  static bool _nearlyIn(String word, List<String> nameWords) {
+    if (word.length < 5) return false;
+    return nameWords.any((n) => (n.length - word.length).abs() <= 1 && n.length >= 4 && _withinOneEdit(word, n));
+  }
+
+  static bool _withinOneEdit(String a, String b) {
+    if (a == b) return true;
+    if (a.length > b.length) return _withinOneEdit(b, a);
+    var i = 0, j = 0, edits = 0;
+    while (i < a.length && j < b.length) {
+      if (a[i] == b[j]) {
+        i++;
+        j++;
+        continue;
+      }
+      if (++edits > 1) return false;
+      if (a.length == b.length) i++;
+      j++;
+    }
+    return edits + (b.length - j) + (a.length - i) <= 1;
   }
 
   static String _singular(String w) => w.length > 3 && w.endsWith('s') ? w.substring(0, w.length - 1) : w;

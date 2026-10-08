@@ -25,7 +25,8 @@ export function describeCapabilities(): string[] {
   // Searches run on the phone itself, over only what the OS lets the app access.
   can.push("find your photos and the documents you added to Child Assist on this phone (with permission)");
   can.push("find a phone number or email address in your phone contacts (with Contacts permission; the search runs on your phone)");
-  if (providers.device.available) can.push("read the text of your TXT documents");
+  // Reading also runs on the phone: the app extracts the text of the one document asked about.
+  can.push("answer questions about what's inside a PDF, DOCX or TXT document you added (the app reads it on your phone)");
   if (providers.webSearch) can.push("search the web for things like restaurant menus");
   if (emailConfigured()) {
     can.push("prepare emails to your contacts, including your saved locations, and send them only after you confirm");
@@ -37,7 +38,7 @@ export function describeCapabilities(): string[] {
 function capabilitiesAnswer(): string {
   const providers = chatProviders();
   const cannot: string[] = [];
-  if (!providers.device.available) cannot.push("read what's inside your documents or see your live location");
+  if (!providers.device.available) cannot.push("see your live location");
   if (!providers.webSearch) cannot.push("search the web");
   if (!emailConfigured()) cannot.push("send emails");
 

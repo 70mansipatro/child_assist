@@ -37,8 +37,22 @@ Future<void> pickAndOpenDocument(
 
   final document = result.documents.firstOrNull;
   if (document == null) {
-    _showSnack(context, 'Only PDF, DOC, DOCX and TXT documents are supported.');
+    _showSnack(
+      context,
+      result.unreadable > 0
+          ? "Couldn't open this document. If it's stored online (like Google Drive), check your "
+              'internet connection and try again.'
+          : 'Only PDF, DOC, DOCX and TXT documents are supported.',
+    );
     return;
+  }
+  if (!document.persisted) {
+    // Honest about what Android allows: the app that provided this file gives no lasting access.
+    _showSnack(
+      context,
+      'Android only lets Child Assist use this document until the app is closed. To keep it, '
+      'choose it from Downloads, Internal storage or Drive in the picker.',
+    );
   }
   final viewer = Builder(
     builder: (viewerContext) => DocumentViewerScreen(

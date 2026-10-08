@@ -14,6 +14,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { PermissionStatus, PermissionType } from "../generated/prisma/client";
 import { createApp } from "../src/app";
 import { prisma } from "../src/lib/prisma";
+import { describeCapabilities, identityAnswer } from "../src/modules/chat/ai/identity";
 import { setChatModels } from "../src/modules/chat/ai/models";
 import { CHUNK_CHARS, MAX_DOCUMENT_CHARS, splitIntoChunks } from "../src/modules/chat/documents/document-answer";
 import { registerVerifiedUser } from "./support/auth";
@@ -433,5 +434,17 @@ describe("reading: security", () => {
     assert.equal(res.json.pendingActions[0]?.type, "SHARE_DOCUMENT");
     assert.equal(await prisma.documentReadRequest.count({ where: { userId: userA.id } }), before);
     assert.equal(res.json.pendingActions[0]?.message, "", "no document content is put into the message");
+  });
+});
+
+describe("reading: what the assistant is told it can do", () => {
+  // The phone reads documents, so this must not depend on a server-side device gateway: without
+  // it the model was told it could not read documents and refused instead of calling read_document.
+  test("document reading is listed without a device gateway, and never denied", () => {
+    const can = describeCapabilities().join("\n");
+    assert.match(can, /what's inside a PDF, DOCX or TXT document/);
+    const answer = identityAnswer("What can you do?") ?? "";
+    assert.match(answer, /what's inside a PDF, DOCX or TXT document/);
+    assert.doesNotMatch(answer, /can't[^\n]*read what's inside your documents/);
   });
 });

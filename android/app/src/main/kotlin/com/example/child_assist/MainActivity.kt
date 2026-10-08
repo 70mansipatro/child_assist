@@ -9,8 +9,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.provider.DocumentsContract
-import android.provider.OpenableColumns
 import android.telephony.PhoneNumberUtils
 import android.telephony.TelephonyManager
 import io.flutter.embedding.android.FlutterActivity
@@ -63,6 +61,12 @@ class MainActivity : FlutterActivity() {
                 // Folders: the user grants one folder in the system folder picker; its documents
                 // are then listed every time without asking again (see DocumentFolders).
                 when (call.method) {
+                    // The system document picker. Each picked document's grant is kept (where
+                    // the provider allows it) and checked before it is returned.
+                    "pickDocuments" -> {
+                        pickDocuments(call.argument<Boolean>("multiple") == true, result)
+                        return@setMethodCallHandler
+                    }
                     "pickFolder" -> {
                         pickFolder(result)
                         return@setMethodCallHandler
@@ -93,7 +97,7 @@ class MainActivity : FlutterActivity() {
                     return@setMethodCallHandler
                 }
                 when (call.method) {
-                    "info" -> inBackground(result) { documentInfo(uri) }
+                    "info" -> inBackground(result) { DocumentAccess.info(this, uri) }
                     "read" -> inBackground(result) { readStart(uri, call.argument<Int>("maxBytes") ?: 0) }
                     // The text of one PDF or DOCX, only when the user asks the assistant about it.
                     "extractText" -> inBackground(result) {
@@ -130,15 +134,19 @@ class MainActivity : FlutterActivity() {
                         if (uri == null || uri.scheme != "content") {
                             result.error("invalid_uri", "A content URI is required.", null)
                         } else {
-                            result.success(
-                                shareDocument(
-                                    uri,
-                                    call.argument<String>("mimeType"),
-                                    call.argument<String>("text"),
-                                    call.argument<String>("phone"),
-                                    call.argument<Boolean>("whatsApp") == true,
-                                )
-                            )
+                            // Checked first (off the UI thread: a cloud document may be fetched),
+                            // so WhatsApp never opens with a document that can no longer be read.
+                            val mimeType = call.argument<String>("mimeType")
+                            val text = call.argument<String>("text")
+                            val phone = call.argument<String>("phone")
+                            val toWhatsApp = call.argument<Boolean>("whatsApp") == true
+                            inBackground(result, then = { readable ->
+                                if (readable == true) shareDocument(uri, mimeType, text, phone, toWhatsApp) else "unavailable"
+                            }) {
+                                val readable = DocumentAccess.canOpen(this, uri)
+                                DocumentAccess.log(this, "share access check ${if (readable) "succeeded" else "failed"}")
+                                readable
+                            }
                         }
                     }
                     else -> result.notImplemented()
@@ -151,12 +159,32 @@ class MainActivity : FlutterActivity() {
         super.onDestroy()
     }
 
-    /** The folder picker's pending answer; one picker at a time. */
+    /** The pickers' pending answers; one picker at a time. */
     private var pendingFolder: MethodChannel.Result? = null
+    private var pendingDocuments: MethodChannel.Result? = null
+
+    /**
+     * Opens the system document picker (Storage Access Framework). Replies with one entry per
+     * picked document (see [DocumentAccess.register]), or an empty list if the user cancels.
+     */
+    private fun pickDocuments(multiple: Boolean, result: MethodChannel.Result) {
+        if (pendingDocuments != null || pendingFolder != null) {
+            result.error("busy", "The document picker is already open.", null)
+            return
+        }
+        try {
+            pendingDocuments = result
+            @Suppress("DEPRECATION")
+            startActivityForResult(DocumentAccess.pickIntent(multiple), REQUEST_DOCUMENTS)
+        } catch (e: ActivityNotFoundException) {
+            pendingDocuments = null
+            result.error("no_picker", "No document picker is available.", null)
+        }
+    }
 
     /** Opens the system folder picker (only when the user asked). Replies {uri, name} or null. */
     private fun pickFolder(result: MethodChannel.Result) {
-        if (pendingFolder != null) {
+        if (pendingFolder != null || pendingDocuments != null) {
             result.error("busy", "The folder picker is already open.", null)
             return
         }
@@ -173,32 +201,57 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    @Deprecated("Uses the platform result callback the folder picker needs.")
+    @Deprecated("Uses the platform result callback the pickers need.")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != REQUEST_FOLDER) return
-        val result = pendingFolder ?: return
-        pendingFolder = null
-        val tree = data?.data
-        if (resultCode != RESULT_OK || tree == null) {
-            result.success(null)
-            return
+        when (requestCode) {
+            REQUEST_DOCUMENTS -> {
+                val result = pendingDocuments ?: return
+                pendingDocuments = null
+                val uris = if (resultCode == RESULT_OK) DocumentAccess.pickedUris(data) else emptyList()
+                if (uris.isEmpty()) {
+                    result.success(emptyList<Any>())
+                    return
+                }
+                // The grant flags the picker gave this result: a persistable grant only if offered.
+                val flags = data?.flags ?: 0
+                inBackground(result) { uris.map { DocumentAccess.register(this, it, flags) } }
+            }
+            REQUEST_FOLDER -> {
+                val result = pendingFolder ?: return
+                pendingFolder = null
+                val tree = data?.data
+                if (resultCode != RESULT_OK || tree == null) {
+                    result.success(null)
+                    return
+                }
+                inBackground(result) { DocumentFolders.keep(this, tree) }
+            }
         }
-        inBackground(result) { DocumentFolders.keep(this, tree) }
     }
 
     private companion object {
         const val REQUEST_FOLDER = 4711
+        const val REQUEST_DOCUMENTS = 4712
     }
 
-    /** Runs [work] off the UI thread (provider queries and reads can be slow) and replies on it. */
-    private fun inBackground(result: MethodChannel.Result, work: () -> Any?) {
+    /**
+     * Runs [work] off the UI thread (provider queries and reads can be slow) and replies on it,
+     * after passing the value through [then] on the UI thread (e.g. to start an activity).
+     */
+    private fun inBackground(result: MethodChannel.Result, then: (Any?) -> Any? = { it }, work: () -> Any?) {
         try {
             io.execute {
                 try {
                     val value = work()
-                    main.post { result.success(value) }
+                    main.post {
+                        try {
+                            result.success(then(value))
+                        } catch (e: Exception) {
+                            result.error("document_error", e.javaClass.simpleName, null)
+                        }
+                    }
                 } catch (e: Exception) {
                     // No message: it could contain a file name.
                     main.post { result.error("document_error", e.javaClass.simpleName, null) }
@@ -207,30 +260,6 @@ class MainActivity : FlutterActivity() {
         } catch (e: RejectedExecutionException) {
             // The activity is being destroyed.
             result.error("document_error", "Unavailable", null)
-        }
-    }
-
-    /** Name, size, type and last-modified time, or null if the document is gone or no longer accessible. */
-    private fun documentInfo(uri: Uri): Map<String, Any?>? {
-        val cursor = try {
-            contentResolver.query(uri, null, null, null, null)
-        } catch (e: SecurityException) {
-            return null
-        } catch (e: IllegalArgumentException) {
-            return null
-        } catch (e: UnsupportedOperationException) {
-            return null
-        } ?: return null
-        cursor.use { c ->
-            if (!c.moveToFirst()) return null
-            fun column(name: String) = c.getColumnIndex(name).takeIf { it >= 0 && !c.isNull(it) }
-            return mapOf(
-                "name" to column(OpenableColumns.DISPLAY_NAME)?.let(c::getString),
-                "size" to column(OpenableColumns.SIZE)?.let(c::getLong),
-                "modifiedAt" to column(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
-                    ?.let(c::getLong)?.takeIf { it > 0 },
-                "mimeType" to try { contentResolver.getType(uri) } catch (e: Exception) { null },
-            )
         }
     }
 

@@ -3,7 +3,6 @@ import 'dart:io' hide BytesBuilder;
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:android_file_picker/android_file_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -43,11 +42,29 @@ class DocumentInfo {
 
 /// A document the user chose in the system picker.
 class PickedDocument {
-  const PickedDocument({required this.reference, required this.name, required this.info});
+  const PickedDocument({
+    required this.reference,
+    required this.name,
+    required this.info,
+    this.persisted = true,
+    this.readable = true,
+  });
 
   final String reference;
   final String name;
   final DocumentInfo info;
+
+  /// Android kept a lasting read grant, so the document can be reopened after a restart. False
+  /// for providers that only allow access until the app closes.
+  final bool persisted;
+
+  /// The document's content could actually be opened when it was picked.
+  final bool readable;
+}
+
+/// Diagnostics for debug builds only. Never document contents, names, URIs or tokens.
+void documentLog(String message) {
+  if (kDebugMode) debugPrint('[Documents] $message');
 }
 
 /// Why a document's text could not be read for the assistant. [reason] is what the server is told.
@@ -186,55 +203,55 @@ class DeviceDocumentPlatform implements DocumentPlatform {
 
   @override
   Future<List<PickedDocument>> pick(List<String> extensions, {bool multiple = true}) async {
-    const androidOptions = FilePickerAndroidOptions(
-      safOptions: AndroidSAFOptions(grant: AndroidSAFGrant.lifetime),
-    );
+    if (_android) return _pickAndroid(multiple);
     final files = multiple
-        ? await FilePicker.pickFiles(
-            type: FileType.custom,
-            allowedExtensions: extensions,
-            androidOptions: androidOptions,
-          )
-        : [
-            ?await FilePicker.pickFile(
-              type: FileType.custom,
-              allowedExtensions: extensions,
-              androidOptions: androidOptions,
-            ),
-          ];
-    if (!_android) {
-      return [
-        for (final file in files)
-          if (file.path != null)
-            PickedDocument(
-              reference: file.path!,
-              name: file.name,
-              info: await info(file.path!) ?? DocumentInfo(size: file.lengthSync()),
-            ),
-      ];
+        ? await FilePicker.pickFiles(type: FileType.custom, allowedExtensions: extensions)
+        : [?await FilePicker.pickFile(type: FileType.custom, allowedExtensions: extensions)];
+    return [
+      for (final file in files)
+        if (file.path != null)
+          PickedDocument(
+            reference: file.path!,
+            name: file.name,
+            info: await info(file.path!) ?? DocumentInfo(size: file.lengthSync()),
+          ),
+    ];
+  }
+
+  /// Android: Child Assist's own Storage Access Framework picker (DocumentAccess.kt). The native
+  /// side takes the persistable grant, confirms Android kept it, and reads the metadata and opens
+  /// the stream once, all through ContentResolver. Nothing is copied, and the reference is the
+  /// content URI itself: it is never turned into a file path.
+  Future<List<PickedDocument>> _pickAndroid(bool multiple) async {
+    final raw = await _channel.invokeListMethod<Object?>('pickDocuments', {'multiple': multiple}) ?? const [];
+    final picked = <PickedDocument>[];
+    for (final entry in raw) {
+      if (entry is! Map) continue;
+      final uri = entry['uri'];
+      if (uri is! String || !uri.startsWith('content://')) continue;
+      final info = _infoFrom(entry);
+      picked.add(PickedDocument(
+        reference: uri,
+        name: info.name ?? '',
+        info: info,
+        persisted: entry['persisted'] == true,
+        readable: entry['readable'] == true,
+      ));
     }
-    try {
-      final picked = <PickedDocument>[];
-      for (final file in files) {
-        final uri = file is AndroidPlatformFile ? file.safHandle?.uri : null;
-        if (uri == null) continue;
-        final reference = uri.toString();
-        picked.add(PickedDocument(
-          reference: reference,
-          name: file.name,
-          info: await info(reference) ?? DocumentInfo(size: file.lengthSync()),
-        ));
-      }
-      return picked;
-    } finally {
-      // The plugin also copies every picked file into the app cache. Child Assist reads the
-      // originals through their content URIs, so those copies are deleted straight away.
-      try {
-        await FilePicker.clearTemporaryFiles();
-      } catch (e) {
-        debugPrint('Clearing picker copies failed: ${e.runtimeType}');
-      }
-    }
+    documentLog('picker URIs received: ${picked.length}, '
+        'persisted: ${picked.where((p) => p.persisted).length}, '
+        'readable: ${picked.where((p) => p.readable).length}');
+    return picked;
+  }
+
+  static DocumentInfo _infoFrom(Map<dynamic, dynamic> map) {
+    final modified = map['modifiedAt'];
+    return DocumentInfo(
+      name: map['name'] as String?,
+      mimeType: map['mimeType'] as String?,
+      size: (map['size'] as num?)?.toInt(),
+      modifiedAt: modified is num ? DateTime.fromMillisecondsSinceEpoch(modified.toInt()) : null,
+    );
   }
 
   @override
@@ -249,14 +266,7 @@ class DeviceDocumentPlatform implements DocumentPlatform {
       );
     }
     final map = await _channel.invokeMapMethod<String, Object?>('info', {'uri': reference});
-    if (map == null) return null;
-    final modified = map['modifiedAt'] as int?;
-    return DocumentInfo(
-      name: map['name'] as String?,
-      mimeType: map['mimeType'] as String?,
-      size: map['size'] as int?,
-      modifiedAt: modified == null ? null : DateTime.fromMillisecondsSinceEpoch(modified),
-    );
+    return map == null ? null : _infoFrom(map);
   }
 
   @override
@@ -392,11 +402,16 @@ class DocumentStorage {
 
   final FlutterSecureStorage _storage;
 
-  Future<List<DocumentItem>> read(String userId) async => _decode(await _storage.read(key: _key(userId)));
+  /// The registry of [userId]. Each entry is also tagged with its owner, and an entry tagged with
+  /// another account is never returned, whatever key it is found under.
+  Future<List<DocumentItem>> read(String userId) async =>
+      _decode(await _storage.read(key: _key(userId)), owner: userId);
 
   Future<void> write(String userId, List<DocumentItem> documents) => _storage.write(
         key: _key(userId),
-        value: jsonEncode([for (final d in documents) d.toStorage()]),
+        value: jsonEncode([
+          for (final d in documents) {...d.toStorage(), 'owner': userId},
+        ]),
       );
 
   /// Whether another account on this device has also added the document at [reference].
@@ -440,13 +455,15 @@ class DocumentStorage {
     return false;
   }
 
-  static List<DocumentItem> _decode(String? raw) {
+  static List<DocumentItem> _decode(String? raw, {String? owner}) {
     if (raw == null) return [];
     final list = jsonDecode(raw);
     if (list is! List) return [];
     return [
       for (final entry in list)
-        if (entry is Map<String, dynamic>) ?DocumentItem.fromStorage(entry),
+        // Entries written before owners were recorded have none; they are under the owner's key.
+        if (entry is Map<String, dynamic> && (owner == null || entry['owner'] == null || entry['owner'] == owner))
+          ?DocumentItem.fromStorage(entry),
     ];
   }
 }
@@ -457,6 +474,7 @@ class AddDocumentsResult {
     this.added = const [],
     this.alreadyAdded = 0,
     this.unsupported = 0,
+    this.unreadable = 0,
     this.documents = const [],
   });
 
@@ -471,7 +489,14 @@ class AddDocumentsResult {
   /// Picked files whose type Child Assist does not support (they were not added).
   final int unsupported;
 
-  bool get cancelled => added.isEmpty && alreadyAdded == 0 && unsupported == 0;
+  /// Picked files that could not be opened (e.g. a Google Drive file while offline). Not added.
+  final int unreadable;
+
+  /// Documents Android lets Child Assist use only until the app closes: their provider gives no
+  /// lasting grant, so after a restart they show as unavailable.
+  List<DocumentItem> get temporary => [for (final d in documents) if (!d.persisted) d];
+
+  bool get cancelled => added.isEmpty && alreadyAdded == 0 && unsupported == 0 && unreadable == 0;
 }
 
 /// The start of a text document, decoded for display.
@@ -496,7 +521,21 @@ class DocumentService {
     DocumentStorage? storage,
   })  : _auth = authService,
         _platform = platform ?? DeviceDocumentPlatform(),
-        _storage = storage ?? DocumentStorage();
+        _storage = storage ?? DocumentStorage() {
+    _signedInAs = authService.currentUser?.id;
+    authService.addListener(_onAuthChanged);
+  }
+
+  String? _signedInAs;
+
+  /// On logout or an account switch, nothing of the previous account stays in memory. Each
+  /// account's registry stays in storage under its own key, for when it signs in again.
+  void _onAuthChanged() {
+    final id = _auth.currentUser?.id;
+    if (id == _signedInAs) return;
+    _signedInAs = id;
+    _folderCache.clear();
+  }
 
   final AuthService _auth;
   final DocumentPlatform _platform;
@@ -664,6 +703,7 @@ class DocumentService {
     final missing = await findUnavailable(result.documents);
     final checked = [for (final m in result.matches) m.withAvailability(!missing.contains(m.document.id))];
     final available = checked.where((m) => m.available).toList();
+    documentLog('document search matches: ${result.matches.length}, available: ${available.length}');
     return DocumentSearchResult(
       words: result.words,
       type: result.type,
@@ -687,7 +727,7 @@ class DocumentService {
           final documents = await _storage.read(userId);
           final added = <DocumentItem>[];
           final all = <DocumentItem>[];
-          var alreadyAdded = 0, unsupported = 0;
+          var alreadyAdded = 0, unsupported = 0, unreadable = 0;
           final now = DateTime.now();
           for (final file in picked) {
             final name = file.info.name ?? file.name;
@@ -697,10 +737,15 @@ class DocumentService {
               await _platform.release(file.reference);
               continue;
             }
+            if (!file.readable) {
+              unreadable++;
+              await _platform.release(file.reference);
+              continue;
+            }
             final existing = documents.indexWhere((d) => d.reference == file.reference);
             if (existing >= 0) {
               alreadyAdded++;
-              documents[existing] = _withInfo(documents[existing], file.info);
+              documents[existing] = _withInfo(documents[existing], file.info).copyWith(persisted: file.persisted);
               all.add(documents[existing]);
               continue;
             }
@@ -713,16 +758,20 @@ class DocumentService {
               mimeType: file.info.mimeType,
               size: file.info.size,
               modifiedAt: file.info.modifiedAt,
+              persisted: file.persisted,
             );
             documents.add(document);
             added.add(document);
             all.add(document);
           }
           await _storage.write(userId, documents);
+          documentLog('documents registered: ${added.length} new, $alreadyAdded already added, '
+              '$unsupported unsupported, $unreadable unreadable');
           return AddDocumentsResult(
             added: added,
             alreadyAdded: alreadyAdded,
             unsupported: unsupported,
+            unreadable: unreadable,
             documents: all,
           );
         }, 'Unable to add documents.'));
@@ -781,7 +830,7 @@ class DocumentService {
     final bytes = await _guard('Reading a document', () => _platform.read(document.reference, maxTextPreviewBytes + 1));
     if (bytes == null) throw const DocumentUnavailableException();
     final truncated = bytes.length > maxTextPreviewBytes;
-    final text = utf8.decode(truncated ? bytes.sublist(0, maxTextPreviewBytes) : bytes, allowMalformed: true);
+    final text = decodeText(truncated ? bytes.sublist(0, maxTextPreviewBytes) : bytes);
     return DocumentText(text, truncated: truncated);
   }
 
@@ -799,6 +848,7 @@ class DocumentService {
   /// cannot be read, [DocumentException] on other errors.
   Future<DocumentContent> readContent(DocumentItem document) async {
     _userId();
+    documentLog('document read started (${document.type.label})');
     final info = await _guard('Checking a document', () => _platform.info(document.reference));
     if (info == null) throw const DocumentUnavailableException();
 
@@ -810,7 +860,7 @@ class DocumentService {
         // UTF-8 uses at most 4 bytes per character.
         final bytes = await _guard('Reading a document', () => _platform.read(document.reference, maxContentChars * 4 + 1));
         if (bytes == null) throw const DocumentUnavailableException();
-        final text = utf8.decode(bytes, allowMalformed: true);
+        final text = decodeText(bytes);
         content = text.length > maxContentChars
             ? DocumentContent(text.substring(0, maxContentChars), truncated: true)
             : DocumentContent(text, truncated: bytes.length > maxContentChars * 4);
@@ -827,6 +877,7 @@ class DocumentService {
           truncated: extracted.truncated || text.length > maxContentChars,
         );
     }
+    documentLog('extracted characters: ${content.text.length}${content.truncated ? ' (truncated)' : ''}');
     final meaningful = RegExp(r'[\p{L}\p{N}]', unicode: true).allMatches(content.text).length;
     if (meaningful < _minMeaningfulChars) throw DocumentTextException(DocumentTextProblem.noText);
     return content;
@@ -857,6 +908,22 @@ class DocumentService {
 
   String _newId(DateTime now) =>
       'doc_${now.microsecondsSinceEpoch.toRadixString(36)}${_random.nextInt(1 << 30).toRadixString(36)}';
+
+  /// A text file's bytes as text: UTF-8 (with or without a byte-order mark) or, when marked as
+  /// such, UTF-16. Invalid bytes become replacement characters rather than failing the read.
+  static String decodeText(List<int> bytes) {
+    if (bytes.length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) {
+      return utf8.decode(bytes.sublist(3), allowMalformed: true);
+    }
+    if (bytes.length >= 2 && ((bytes[0] == 0xFF && bytes[1] == 0xFE) || (bytes[0] == 0xFE && bytes[1] == 0xFF))) {
+      final little = bytes[0] == 0xFF;
+      return String.fromCharCodes([
+        for (var i = 2; i + 1 < bytes.length; i += 2)
+          little ? bytes[i] | (bytes[i + 1] << 8) : (bytes[i] << 8) | bytes[i + 1],
+      ]);
+    }
+    return utf8.decode(bytes, allowMalformed: true);
+  }
 
   static DocumentItem _withInfo(DocumentItem document, DocumentInfo info) => document.copyWith(
         name: info.name,
