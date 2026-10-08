@@ -27,6 +27,22 @@ class PhotoVisit {
   }
 }
 
+/// An analysis the server opened for a photo the user asked about ("find it and explain it"): the
+/// phone sends that one photo now, without the user tapping Analyze.
+class PhotoAnalysisTicket {
+  const PhotoAnalysisTicket({required this.requestId, required this.photoId});
+
+  final String requestId;
+  final String photoId;
+
+  static PhotoAnalysisTicket? tryParse(Object? json) {
+    if (json is! Map<String, dynamic>) return null;
+    final requestId = json['requestId'], photoId = json['photoId'];
+    if (requestId is! String || photoId is! String || requestId.isEmpty || photoId.isEmpty) return null;
+    return PhotoAnalysisTicket(requestId: requestId, photoId: photoId);
+  }
+}
+
 /// What the assistant asked this phone to search its gallery for. Nothing found is sent back
 /// except the metadata of the photos actually shown.
 class PhotoSearchQuery {
@@ -38,6 +54,7 @@ class PhotoSearchQuery {
     this.locationContext = false,
     this.latest = false,
     this.visits = const [],
+    this.analyze = false,
   });
 
   /// Words that should be in the photo's file name.
@@ -55,6 +72,10 @@ class PhotoSearchQuery {
   final bool latest;
   final List<PhotoVisit> visits;
 
+  /// The user also asked about what is IN the photo ("show me today's photo and explain it"): the
+  /// photo found is looked at automatically, so no Analyze button is needed.
+  final bool analyze;
+
   factory PhotoSearchQuery.fromEvent(Map<String, dynamic> data) {
     final query = data['query'] is Map<String, dynamic> ? data['query'] as Map<String, dynamic> : const <String, dynamic>{};
     String? text(String key) => query[key] is String && (query[key] as String).trim().isNotEmpty ? (query[key] as String).trim() : null;
@@ -66,6 +87,7 @@ class PhotoSearchQuery {
       end: DateTime.tryParse(query['endDate'] as String? ?? ''),
       locationContext: query['locationContext'] == true,
       latest: query['latest'] == true,
+      analyze: query['analyze'] == true,
       visits: rawVisits is List
           ? [for (final v in rawVisits.whereType<Map<String, dynamic>>()) ?PhotoVisit.tryParse(v)]
           : const [],

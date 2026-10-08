@@ -139,7 +139,7 @@ class ChatService {
   Future<ChatMessage?> failDocumentRead(String requestId, String reason, {String? conversationId}) =>
       _auth.authorized((token) => _api.failDocumentRead(token, requestId, reason, conversationId: conversationId));
 
-  Future<List<String>> reportPhotoSearch(
+  Future<({List<String> ids, PhotoAnalysisTicket? analysis})> reportPhotoSearch(
     String requestId, {
     required String outcome,
     List<Map<String, dynamic>> photos = const [],
@@ -161,7 +161,7 @@ class ChatService {
         ),
       );
 
-  Future<void> selectPhoto(String photoId, {String? conversationId}) =>
+  Future<PhotoAnalysisTicket?> selectPhoto(String photoId, {String? conversationId}) =>
       _auth.authorized((token) => _api.selectPhoto(token, photoId, conversationId: conversationId));
 
   Future<ChatMessage> answerPhotoAnalysis(

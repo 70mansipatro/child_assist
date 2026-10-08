@@ -235,6 +235,15 @@ class VoiceChatController extends ChangeNotifier {
     await speakMessage(reply);
   }
 
+  /// An answer that came after its turn (what a photo shows, once the phone sent it): read aloud
+  /// like a reply when "Voice replies" is on (cutting short "Let me look at the photo"), never
+  /// while the user is talking.
+  Future<void> speakLateReply(ChatMessage message) async {
+    if (_disposed || !_tts.repliesEnabled || _state != VoiceState.idle) return;
+    if (_tts.isSpeaking) await _tts.stop();
+    await speakMessage(message);
+  }
+
   /// The speaker button on a reply: reads it aloud, or stops if it is the one being read.
   Future<void> toggleSpeaking(ChatMessage message) async {
     if (speakingMessageId == message.id) return stopSpeaking();

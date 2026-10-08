@@ -18,6 +18,7 @@ import { prisma } from "../src/lib/prisma";
 import { describeCapabilities } from "../src/modules/chat/ai/identity";
 import { setChatModels } from "../src/modules/chat/ai/models";
 import { detectImageType } from "../src/modules/chat/photos/photo-answer";
+import { asksForRecentPhoto, photoAnalysisQuestion } from "../src/modules/chat/photos/photo-intent";
 import { registerVerifiedUser } from "./support/auth";
 
 let server: Server;
@@ -165,11 +166,11 @@ async function turn(
   toolName: string,
   input: unknown,
   conversationId?: string,
-  opts: { visionAnswer?: string; visionFails?: boolean } = {},
+  opts: { visionAnswer?: string; visionFails?: boolean; message?: string } = {},
 ) {
   const script = scripted(toolName, input, opts);
   setChatModels({ chat: script.model });
-  const res = await chat(user, `please ${word()}`, conversationId);
+  const res = await chat(user, opts.message ?? `please ${word()}`, conversationId);
   assert.equal(res.status, 200, res.raw);
   return { res, raw: res.raw, ...script, event: res.json.toolEvents[0], conversationId: res.json.conversationId as string };
 }
@@ -418,11 +419,18 @@ describe("photo analysis: real multimodal input", () => {
   test("the picked photo of several is the one analysed; before picking, the model must ask", async () => {
     const { photos, conversationId } = await findPhotos(userA, 3);
     let t = await turn(userA, "analyze_photo", { question: "What is in it?" }, conversationId);
-    assert.equal(t.event.status, "unavailable");
-    assert.match(t.res.json.response, /NO_PHOTO_SELECTED/);
+    // Nothing is guessed: no photo is sent until the user taps the one they mean.
+    assert.deepEqual(t.event, { kind: "photo_analysis", status: "success" });
     assert.match(t.res.json.response, /Several photos were shown/);
+    assert.match(t.res.json.response, /Never guess which one/);
+    assert.equal(await prisma.photoRequest.count({ where: { conversationId, kind: "ANALYZE" } }), 0);
 
-    await call("POST", `/api/chat/photos/${photos[2].id}/select`, { token: userA.token, body: { conversationId } });
+    // Picking one answers the question that was waiting, with no Analyze tap.
+    const picked = await call("POST", `/api/chat/photos/${photos[2].id}/select`, { token: userA.token, body: { conversationId } });
+    assert.equal(picked.json.analysis.photoId, photos[2].id);
+    const row = await prisma.photoRequest.findUniqueOrThrow({ where: { id: picked.json.analysis.requestId } });
+    assert.equal(row.question, "What is in it?");
+
     t = await turn(userA, "analyze_photo", { question: "What is in it?" }, conversationId);
     assert.equal(t.event.data.photoId, photos[2].id);
   });
@@ -500,6 +508,423 @@ describe("photo analysis: real multimodal input", () => {
     assert.equal(detectImageType(randomPng()), "image/png");
     assert.equal(detectImageType(Buffer.concat([Buffer.from("RIFF"), randomBytes(4), Buffer.from("WEBP")])), "image/webp");
     assert.equal(detectImageType(Buffer.from(`/storage/emulated/0/DCIM/${word()}.jpg`)), null);
+  });
+});
+
+/**
+ * A chat turn in which the model calls every tool in [calls] in ONE step (e.g. a search and
+ * analyze_photo together) and then replies with the tool results.
+ */
+async function multiTurn(user: TestUser, calls: Array<[string, unknown]>, message: string, conversationId?: string) {
+  const model = new MockLanguageModelV4({
+    doGenerate: async (options: LanguageModelV4CallOptions) => {
+      const system = options.prompt.filter((p) => p.role === "system").map((p) => p.content as string).join("\n");
+      if (system.includes("word title")) return text("Photos");
+      const last = options.prompt[options.prompt.length - 1];
+      if (last?.role === "tool") return text(`RESULT ${JSON.stringify(last.content)}`);
+      return {
+        content: calls.map(([toolName, input]) => ({
+          type: "tool-call" as const,
+          toolCallId: `call-${++callCounter}`,
+          toolName,
+          input: JSON.stringify(input),
+        })),
+        finishReason: { unified: "tool-calls", raw: undefined },
+        usage,
+        warnings: [],
+      };
+    },
+  });
+  setChatModels({ chat: model });
+  const res = await chat(user, message, conversationId);
+  assert.equal(res.status, 200, res.raw);
+  return { res, conversationId: res.json.conversationId as string };
+}
+
+/** Answers an analysis ticket with a real image, the way the phone does without any tap. */
+async function answerTicket(user: TestUser, ticket: { requestId: string; photoId: string }, answer: string) {
+  const vision = scripted("analyze_photo", {}, { visionAnswer: answer });
+  setChatModels({ chat: vision.model });
+  const image = randomPng();
+  const res = await call("POST", answerPath(ticket.requestId), {
+    token: user.token,
+    body: { photoId: ticket.photoId, image: image.toString("base64") },
+  });
+  return { res, vision: vision.vision, image };
+}
+
+describe("photo analysis: automatic when the user asked about the photo", () => {
+  test("'Show me today's photo and explain it': one match is looked at without an Analyze tap", async () => {
+    const question = "Show me today's photo and explain it";
+    const t = await turn(userA, "get_photo_candidates", { period: "today", question }, undefined, { message: question });
+    assert.equal(t.event.data.query.analyze, true);
+    assert.match(t.res.json.response, /looked at automatically/);
+
+    const report = await call("POST", resultsPath(t.event.data.requestId), {
+      token: userA.token,
+      body: { conversationId: t.conversationId, outcome: "found", photos: shown(1), total: 1 },
+    });
+    assert.equal(report.status, 200, report.raw);
+    const photoId = report.json.photos[0].id;
+    assert.deepEqual(report.json.analysis, { requestId: report.json.analysis.requestId, photoId });
+
+    const answer = `The photo shows a plate of ${word()} and rice.`;
+    const { res, vision, image } = await answerTicket(userA, report.json.analysis, answer);
+    assert.equal(res.status, 200, res.raw);
+    assert.equal(res.json.message.content, answer);
+    assert.equal(vision.length, 1);
+    assert.ok(vision[0].files[0].bytes.equals(image), "the actual image reached Gemini vision");
+    assert.match(vision[0].text, /explain it/);
+  });
+
+  for (const message of [
+    "Explain this image",
+    "What is in this photo?",
+    "What color is the dress?",
+    "Describe this picture",
+    "Read the text in this image",
+    "Get and explain the recently clicked picture in Durgi",
+  ]) {
+    test(`backstop: "${message}" with a search but no question from the model is still analysed`, async () => {
+      const t = await turn(userA, "get_photo_candidates", { latest: true }, undefined, { message });
+      assert.equal(t.event.data.query.analyze, true);
+      const report = await call("POST", resultsPath(t.event.data.requestId), {
+        token: userA.token,
+        body: { outcome: "found", photos: shown(1) },
+      });
+      assert.ok(report.json.analysis, report.raw);
+      const row = await prisma.photoRequest.findUniqueOrThrow({ where: { id: report.json.analysis.requestId } });
+      assert.equal(row.kind, "ANALYZE");
+      assert.equal(row.question, message);
+      assert.equal(row.photoId, report.json.photos[0].id);
+    });
+  }
+
+  test("'Show me today's photo' only shows it: no analysis is opened", async () => {
+    const t = await turn(userA, "get_photo_candidates", { period: "today" }, undefined, { message: "Show me today's photo" });
+    assert.equal(t.event.data.query.analyze, false);
+    const report = await call("POST", resultsPath(t.event.data.requestId), {
+      token: userA.token,
+      body: { outcome: "found", photos: shown(1) },
+    });
+    assert.equal(report.json.analysis, null);
+    assert.equal(await prisma.photoRequest.count({ where: { conversationId: t.conversationId, kind: "ANALYZE" } }), 0);
+  });
+
+  test("search and analyze_photo in one turn: the NEW photo is analysed, never the older one", async () => {
+    const earlier = await findPhotos(userA, 1);
+    const { res } = await multiTurn(
+      userA,
+      [
+        ["get_photo_candidates", { latest: true }],
+        ["analyze_photo", { question: "What is in it?" }],
+      ],
+      "find my latest photo and tell me what is in it",
+      earlier.conversationId,
+    );
+    const events = res.json.toolEvents;
+    const search = events.find((e: any) => e.kind === "photos");
+    assert.equal(search.data.query.analyze, true);
+    assert.deepEqual(events.find((e: any) => e.kind === "photo_analysis"), { kind: "photo_analysis", status: "success" });
+    assert.equal(
+      await prisma.photoRequest.count({ where: { conversationId: earlier.conversationId, kind: "ANALYZE" } }),
+      0,
+      "the earlier photo is not sent",
+    );
+
+    const report = await call("POST", resultsPath(search.data.requestId), { token: userA.token, body: { outcome: "found", photos: shown(1) } });
+    assert.notEqual(report.json.analysis.photoId, earlier.photos[0].id);
+    assert.equal(report.json.analysis.photoId, report.json.photos[0].id);
+    const row = await prisma.photoRequest.findUniqueOrThrow({ where: { id: report.json.analysis.requestId } });
+    assert.equal(row.question, "What is in it?");
+  });
+
+  test("several matches: the user picks one, and that photo is analysed automatically", async () => {
+    const question = "Explain the photo from yesterday";
+    const t = await turn(userA, "get_photo_candidates", { period: "yesterday", question }, undefined, { message: question });
+    const report = await call("POST", resultsPath(t.event.data.requestId), {
+      token: userA.token,
+      body: { conversationId: t.conversationId, outcome: "found", photos: shown(3), total: 3 },
+    });
+    assert.equal(report.json.analysis, null, "never guesses which one");
+    assert.equal(report.json.message.content, "I found 3 matching photos. Which one would you like?");
+    const photos = report.json.photos as any[];
+
+    // Another user cannot pick it (and so cannot trigger an analysis).
+    const other = await call("POST", `/api/chat/photos/${photos[1].id}/select`, { token: userB.token, body: {} });
+    assert.equal(other.status, 404);
+
+    const picked = await call("POST", `/api/chat/photos/${photos[1].id}/select`, {
+      token: userA.token,
+      body: { conversationId: t.conversationId },
+    });
+    assert.equal(picked.status, 200, picked.raw);
+    assert.equal(picked.json.photo.id, photos[1].id);
+    assert.equal(picked.json.analysis.photoId, photos[1].id);
+
+    const answer = `It shows ${word()} on a table.`;
+    const { res } = await answerTicket(userA, picked.json.analysis, answer);
+    assert.equal(res.json.message.content, answer);
+
+    // A follow-up question about the picked photo is analysed again, from the same photo.
+    const follow = await turn(userA, "analyze_photo", { question: "What color is the dress?" }, t.conversationId, {
+      message: "What color is the dress?",
+    });
+    assert.equal(follow.event.status, "device_lookup");
+    assert.equal(follow.event.data.photoId, photos[1].id);
+  });
+
+  test("no photo found: said plainly, nothing is analysed or invented", async () => {
+    const question = "Explain the photo from the park";
+    const t = await turn(userA, "get_photo_candidates", { period: "today", question }, undefined, { message: question });
+    const report = await call("POST", resultsPath(t.event.data.requestId), {
+      token: userA.token,
+      body: { outcome: "none", reason: "no_name_match" },
+    });
+    assert.equal(report.json.analysis, null);
+    assert.match(report.json.message.content, /^I couldn't find a matching photo/);
+    assert.equal(await prisma.photoRequest.count({ where: { conversationId: t.conversationId, kind: "ANALYZE" } }), 0);
+  });
+
+  test("a plain pick of several (no question asked) only selects", async () => {
+    const { photos, conversationId } = await findPhotos(userA, 2);
+    const picked = await call("POST", `/api/chat/photos/${photos[0].id}/select`, { token: userA.token, body: { conversationId } });
+    assert.equal(picked.json.analysis, null);
+  });
+
+  test("intent detection: content questions count, finding or showing does not", () => {
+    for (const yes of [
+      "Explain this image",
+      "What is in this image?",
+      "What do you see in this photo?",
+      "What color is the dress?",
+      "Is there a dog in this picture?",
+      "Describe this photo",
+      "What is written in this image?",
+      "Read the text in this photo",
+      "Tell me about this picture",
+      "Show me today's photo and explain it",
+      "latest photo me kya hai",
+    ]) {
+      assert.equal(photoAnalysisQuestion(yes), yes, yes);
+    }
+    for (const no of [
+      "Show me today's photo",
+      "show pictures from yesterday",
+      "send me that pic",
+      "Is there a photo from yesterday?",
+      "find IMG_2041",
+      "share this photo on WhatsApp",
+    ]) {
+      assert.equal(photoAnalysisQuestion(no), null, no);
+    }
+  });
+});
+
+/**
+ * A chat turn in which the model calls the tools in [calls] one per step (each step sees the result
+ * of the one before), then replies with every tool result.
+ */
+async function stepTurn(user: TestUser, calls: Array<[string, unknown]>, message: string, conversationId?: string) {
+  const model = new MockLanguageModelV4({
+    doGenerate: async (options: LanguageModelV4CallOptions) => {
+      const system = options.prompt.filter((p) => p.role === "system").map((p) => p.content as string).join("\n");
+      if (system.includes("word title")) return text("Photos");
+      const done = options.prompt.filter((p) => p.role === "tool");
+      if (done.length < calls.length) return toolCall(...calls[done.length]);
+      return text(`RESULT ${JSON.stringify(done.map((p) => p.content))}`);
+    },
+  });
+  setChatModels({ chat: model });
+  const res = await chat(user, message, conversationId);
+  assert.equal(res.status, 200, res.raw);
+  return { res, conversationId: res.json.conversationId as string };
+}
+
+/** The phone reports the one photo it found for [requestId], taken [minutesAgo] minutes ago. */
+async function reportOne(user: TestUser, requestId: string, minutesAgo: number, place?: { name: string; evidence: "gps" | "time" }) {
+  const capturedAt = new Date(Date.now() - minutesAgo * 60_000).toISOString();
+  const report = await call("POST", resultsPath(requestId), {
+    token: user.token,
+    body: { outcome: "found", photos: [{ capturedAt, width: 4000, height: 3000, ...(place ? { place } : {}) }], total: 1 },
+  });
+  assert.equal(report.status, 200, report.raw);
+  return report.json as { photos: any[]; analysis: { requestId: string; photoId: string } | null };
+}
+
+const analyses = (conversationId: string) =>
+  prisma.photoRequest.findMany({ where: { conversationId, kind: "ANALYZE" }, orderBy: { createdAt: "asc" } });
+
+describe("latest / most recent photo: always a fresh gallery search", () => {
+  test("intent: latest, recent and recently clicked count; 'this photo' and plain searches do not", () => {
+    for (const yes of [
+      "Show me the recently clicked picture",
+      "Get the latest photo",
+      "Show my recent photo",
+      "Explain the recently clicked picture",
+      `Show the latest picture from ${cap(word())}`,
+      "Explain my most recent photo",
+      "What is in my latest photo?",
+      "What color is in my recent picture?",
+      "Show me the last photo I took",
+      "latest photo me kya hai",
+    ]) {
+      assert.equal(asksForRecentPhoto(yes), true, yes);
+    }
+    for (const no of [
+      "Explain this photo",
+      "What color is the dress?",
+      "What is written in it?",
+      "Show me today's photo",
+      "Show my recent photos",
+      "Show me a photo from last week",
+      "Explain that latest photo you showed",
+      "Share this photo on WhatsApp",
+    ]) {
+      assert.equal(asksForRecentPhoto(no), false, no);
+    }
+  });
+
+  test("A: 'Show my recent photo' asks the phone for the newest photo, even if the model left latest out", async () => {
+    const t = await turn(userA, "get_photo_candidates", {}, undefined, { message: "Show my recent photo" });
+    assert.equal(t.event.status, "device_lookup");
+    assert.equal(t.event.data.query.latest, true);
+    assert.equal(t.event.data.query.analyze, false, "only shown: the Analyze button stays");
+
+    const plain = await turn(userA, "get_photo_candidates", { period: "today" }, undefined, { message: "Show me today's photo" });
+    assert.equal(plain.event.data.query.latest, false, "a plain search is not narrowed to one photo");
+  });
+
+  test("D: every request is a new search with new ids; a newer photo found later is the one shown", async () => {
+    const first = await turn(userA, "get_photo_candidates", { latest: true }, undefined, { message: "Show my recent photo" });
+    const older = await reportOne(userA, first.event.data.requestId, 90);
+    const second = await turn(userA, "get_photo_candidates", { latest: true }, first.conversationId, {
+      message: "Show my recent photo",
+    });
+    assert.notEqual(second.event.data.requestId, first.event.data.requestId);
+    const newer = await reportOne(userA, second.event.data.requestId, 1);
+    assert.notEqual(newer.photos[0].id, older.photos[0].id);
+    assert.ok(new Date(newer.photos[0].capturedAt) > new Date(older.photos[0].capturedAt));
+  });
+
+  test("B: an old photo shown in the chat is never reused for 'Show my latest photo'", async () => {
+    const earlier = await findPhotos(userA, 1);
+    const old = earlier.photos[0];
+    const { res } = await stepTurn(
+      userA,
+      [
+        ["get_photo", { photoId: old.id }],
+        ["get_photo_candidates", { latest: true }],
+      ],
+      "Show my latest photo",
+      earlier.conversationId,
+    );
+    const [reused, search] = res.json.toolEvents;
+    assert.deepEqual(reused, { kind: "photos", status: "unavailable" }, "the old photo is not shown again");
+    assert.doesNotMatch(JSON.stringify(res.json.toolEvents), new RegExp(old.id));
+    assert.match(res.json.response, /PHOTO_SEARCH_REQUIRED/);
+    assert.equal(search.status, "device_lookup");
+    assert.equal(search.data.query.latest, true);
+
+    const fresh = await reportOne(userA, search.data.requestId, 2);
+    assert.notEqual(fresh.photos[0].id, old.id);
+    assert.equal(fresh.analysis, null);
+  });
+
+  test("G: 'Explain my recent photo' searches afresh and analyses the NEW photo, never the selected old one", async () => {
+    const earlier = await findPhotos(userA, 1);
+    const old = earlier.photos[0];
+    const message = "Explain my recent photo";
+    const { res } = await stepTurn(
+      userA,
+      [
+        ["analyze_photo", { question: message }],
+        ["get_photo_candidates", { latest: true }],
+      ],
+      message,
+      earlier.conversationId,
+    );
+    assert.equal((await analyses(earlier.conversationId)).length, 0, "the old photo is never sent");
+    const search = res.json.toolEvents.find((e: any) => e.kind === "photos");
+    assert.equal(search.data.query.latest, true);
+    assert.equal(search.data.query.analyze, true, "looked at automatically: no Analyze button");
+
+    const fresh = await reportOne(userA, search.data.requestId, 1);
+    assert.ok(fresh.analysis);
+    assert.equal(fresh.analysis.photoId, fresh.photos[0].id);
+    assert.notEqual(fresh.analysis.photoId, old.id);
+    const [row] = await analyses(earlier.conversationId);
+    assert.equal(row.photoId, fresh.photos[0].id);
+    assert.equal(row.question, message);
+
+    const answer = `It shows ${word()} near a window.`;
+    const answered = await answerTicket(userA, fresh.analysis, answer);
+    assert.equal(answered.res.status, 200, answered.res.raw);
+    assert.ok(answered.vision[0].files[0].bytes.equals(answered.image), "the new photo's image reached Gemini vision");
+  });
+
+  test("G: an earlier photo id named alongside this turn's search is not analysed", async () => {
+    const earlier = await findPhotos(userA, 1);
+    const { res } = await multiTurn(
+      userA,
+      [
+        ["get_photo_candidates", { latest: true }],
+        ["analyze_photo", { photoId: earlier.photos[0].id, question: "What is in it?" }],
+      ],
+      "What is in my latest photo?",
+      earlier.conversationId,
+    );
+    assert.equal((await analyses(earlier.conversationId)).length, 0);
+    const search = res.json.toolEvents.find((e: any) => e.kind === "photos");
+    const fresh = await reportOne(userA, search.data.requestId, 1);
+    assert.equal(fresh.analysis?.photoId, fresh.photos[0].id);
+  });
+
+  test("C: 'Explain my latest <place> photo' searches only that place, newest first, and analyses it", async () => {
+    const place = `${cap(word())} ${cap(word())}`;
+    await seedVisit(userA, new Date(Date.now() - 3 * 86_400_000), place);
+    await seedVisit(userA, new Date(Date.now() - 86_400_000), place);
+    await seedVisit(userA, new Date(Date.now() - 2 * 3_600_000), `${cap(word())} ${cap(word())}`);
+    const message = `Explain my latest ${place} photo`;
+    const t = await turn(userA, "get_photo_candidates", { place, question: message }, undefined, { message });
+    const { query, visits } = t.event.data;
+    assert.equal(query.latest, true);
+    assert.equal(query.analyze, true);
+    assert.equal(query.locationContext, true);
+    assert.equal(visits.length, 2, "only the named place's visits");
+    assert.ok(visits.every((v: any) => v.placeName === place));
+
+    const fresh = await reportOne(userA, t.event.data.requestId, 60 * 24, { name: place, evidence: "gps" });
+    assert.equal(fresh.analysis?.photoId, fresh.photos[0].id);
+  });
+
+  test("a place with no saved visit: nothing is matched, said plainly, nothing analysed", async () => {
+    const place = `${cap(word())}${word()}`;
+    const t = await turn(userA, "get_photo_candidates", { place }, undefined, { message: `Show the latest picture from ${place}` });
+    assert.deepEqual(t.event.data.visits, []);
+    const report = await call("POST", resultsPath(t.event.data.requestId), {
+      token: userA.token,
+      body: { outcome: "none", reason: "no_visits" },
+    });
+    assert.match(report.json.message.content, /^I couldn't find a matching photo/);
+    assert.equal(report.json.analysis, null);
+  });
+
+  test("F: 'Explain this photo' after the user picked one analyses the picked photo, with no new search", async () => {
+    const { photos, conversationId } = await findPhotos(userA, 3);
+    const picked = await call("POST", `/api/chat/photos/${photos[2].id}/select`, { token: userA.token, body: { conversationId } });
+    assert.equal(picked.status, 200, picked.raw);
+    const searches = await prisma.photoRequest.count({ where: { conversationId, kind: "SEARCH" } });
+
+    const t = await turn(userA, "analyze_photo", { question: "Explain this photo" }, conversationId, { message: "Explain this photo" });
+    assert.equal(t.event.status, "device_lookup");
+    assert.equal(t.event.data.photoId, photos[2].id);
+    assert.equal(await prisma.photoRequest.count({ where: { conversationId, kind: "SEARCH" } }), searches);
+
+    const follow = await turn(userA, "analyze_photo", { question: "What is written in it?" }, conversationId, {
+      message: "What is written in it?",
+    });
+    assert.equal(follow.event.data.photoId, photos[2].id, "follow-ups stay on the picked photo");
   });
 });
 

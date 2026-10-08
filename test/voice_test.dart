@@ -17,6 +17,7 @@ import 'package:child_assist/features/chat/screens/chat_screen.dart';
 import 'package:child_assist/features/chat/services/text_to_speech_service.dart';
 import 'package:child_assist/features/chat/services/voice_input.dart';
 import 'package:child_assist/features/permissions/screens/permissions_screen.dart';
+import 'package:child_assist/features/photos/services/photo_gallery_service.dart';
 import 'package:child_assist/main.dart';
 
 import 'support/app_driver.dart';
@@ -388,7 +389,7 @@ void main() {
     late FakeTextToSpeech tts;
     late AppServices services;
 
-    Future<void> startApp(WidgetTester tester, {bool voiceAvailable = true}) async {
+    Future<void> startApp(WidgetTester tester, {bool voiceAvailable = true, List<PhotoItem> photos = const []}) async {
       // The listening button pulses; with reduced motion it does not, so frames can settle.
       tester.platformDispatcher.accessibilityFeaturesTestValue = const FakeAccessibilityFeatures(disableAnimations: true);
       addTearDown(tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
@@ -396,7 +397,7 @@ void main() {
       os = FakePermissionService();
       voice = FakeVoiceInput(available: voiceAvailable);
       tts = FakeTextToSpeech();
-      services = backend.services(os, voiceInput: voice, textToSpeech: tts);
+      services = backend.services(os, voiceInput: voice, textToSpeech: tts, photoLibrary: FakePhotoLibrary(photos));
       await services.authService.restoreSession();
       await tester.pumpWidget(MyApp(services: services));
       await tester.pumpAndSettle();
@@ -623,6 +624,45 @@ void main() {
       await tester.pumpAndSettle();
       expect(tts.isSpeaking, isFalse);
       expect(find.byTooltip('Read aloud'), findsOneWidget);
+    });
+
+    testWidgets('a spoken "show me today\'s photo and explain it" looks at the photo with no tap', (tester) async {
+      final now = DateTime.now();
+      final taken = now.subtract(const Duration(minutes: 20));
+      await startApp(tester, photos: [
+        PhotoItem(id: 'v1', name: 'IMG_3001.jpg', width: 4000, height: 3000, createdAt: taken, modifiedAt: taken, mimeType: 'image/jpeg'),
+      ]);
+      os.os[AppPermission.photos] = PermissionState.granted;
+      tts.repliesEnabled = true;
+      final start = DateTime(now.year, now.month, now.day);
+      backend.chatResponder = (_) => FakeChatReply('Let me find that photo and look at it.', toolEvents: [
+            {
+              'kind': 'photos',
+              'status': 'device_lookup',
+              'data': {
+                'requestId': 'voice-search',
+                'query': {
+                  'startDate': start.toUtc().toIso8601String(),
+                  'endDate': start.add(const Duration(days: 1)).toUtc().toIso8601String(),
+                  'locationContext': false,
+                  'latest': false,
+                  'analyze': true,
+                },
+                'visits': const [],
+              },
+            },
+          ]);
+
+      await startListening(tester);
+      voice.finish("Show me today's photo and explain it");
+      await tester.pumpAndSettle();
+
+      expect(backend.chatRequests.single['message'], "Show me today's photo and explain it");
+      expect(backend.analysedImages, hasLength(1), reason: 'the actual photo was looked at');
+      expect(find.text('Analyze'), findsNothing);
+      expect(find.text('Answered from this photo.'), findsOneWidget);
+      // With voice replies on, the answer from the image is read aloud as well.
+      expect(tts.spoken.last, 'This photo shows an image of ${backend.analysedImages.single.length} bytes.');
     });
 
     testWidgets('typed messages are also read aloud when voice replies are on', (tester) async {

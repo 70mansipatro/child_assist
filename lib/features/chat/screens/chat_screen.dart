@@ -142,6 +142,8 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     _lifecycle;
+    // What a photo shows arrives after its turn; with Voice replies on it is read aloud too.
+    _session.onLateReply = _voice.speakLateReply;
     widget.wakeWordService?.addListener(_onWakeWordChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) => _takeWakeWord());
   }

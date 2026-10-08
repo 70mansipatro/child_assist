@@ -601,6 +601,44 @@ void main() {
       expect(find.text('Answered from this photo.'), findsOneWidget);
     });
 
+    testWidgets('"Hey Child, show me today\'s photo and explain it" looks at the photo with no tap', (tester) async {
+      final now = DateTime.now();
+      final taken = now.subtract(const Duration(minutes: 10));
+      await startApp(tester, photos: [
+        PhotoItem(id: 'w1', name: 'IMG_4001.jpg', width: 4000, height: 3000, createdAt: taken, modifiedAt: taken, mimeType: 'image/jpeg'),
+      ]);
+      os.os[AppPermission.photos] = PermissionState.granted;
+      await switchOn(tester);
+      final start = DateTime(now.year, now.month, now.day);
+      backend.chatResponder = (_) => FakeChatReply('Let me find that photo and look at it.', toolEvents: [
+            {
+              'kind': 'photos',
+              'status': 'device_lookup',
+              'data': {
+                'requestId': 'wake-search',
+                'query': {
+                  'startDate': start.toUtc().toIso8601String(),
+                  'endDate': start.add(const Duration(days: 1)).toUtc().toIso8601String(),
+                  'locationContext': false,
+                  'latest': false,
+                  'analyze': true,
+                },
+                'visits': const [],
+              },
+            },
+          ]);
+
+      await sayHeyChild(tester);
+      voice.finish("Hey Child, show me today's photo and explain it");
+      await tester.pumpAndSettle();
+
+      expect(backend.chatRequests.last['message'], "show me today's photo and explain it");
+      expect(backend.photoAnalysisStore.values.single['question'], "show me today's photo and explain it");
+      expect(backend.analysedImages, hasLength(1), reason: 'the actual photo was sent for image recognition');
+      expect(find.text('Analyze'), findsNothing);
+      expect(find.text('Answered from this photo.'), findsOneWidget);
+    });
+
     testWidgets('a wake phrase that opened the app before it was running is answered after sign-in', (tester) async {
       FlutterSecureStorage.setMockInitialValues({'wake_word_enabled_u1': 'true'});
       tester.platformDispatcher.accessibilityFeaturesTestValue = const FakeAccessibilityFeatures(disableAnimations: true);

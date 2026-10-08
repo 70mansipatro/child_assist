@@ -13,7 +13,7 @@ import {
 } from "../../../lib/local-dates";
 import { searchLocations } from "../../location/location.service";
 import { currentPhoto, findUserPhoto, PHOTO_ID_PATTERN, toPhotoView, type PhotoView } from "../photos/photo-references";
-import { preparePhotoAnalysis, preparePhotoSearch } from "../photos/photo-requests";
+import { awaitPhotoChoice, preparePhotoAnalysis, preparePhotoSearch } from "../photos/photo-requests";
 import { defineChatTool, hasPermission, permissionRequired } from "./define-tool";
 import { fail, ok, type ToolContext, type ToolResult } from "./types";
 
@@ -37,6 +37,13 @@ const localDate = (label: string) => z.string().refine(isLocalDate, `${label} mu
 // Words the user said; one line, nothing that could close a prompt block.
 const words = (max: number) => z.string().trim().max(max).regex(/^[^\r\n\t<>"]*$/);
 const photoId = z.string().regex(PHOTO_ID_PATTERN, "Invalid photo id");
+// Quotes are fine here ('what does the "EXIT" sign say?'): it is sent as plain text, never in a block.
+const photoQuestion = z
+  .string()
+  .trim()
+  .min(1)
+  .max(500)
+  .regex(/^[^\u0000-\u001f\u007f]+$/);
 
 const NO_PHOTO =
   "No photo has been shown in this chat yet. Ask the user which photo they mean, or search for it with " +
@@ -44,9 +51,17 @@ const NO_PHOTO =
 const CHOOSING =
   "Several photos were shown and the user has not picked one yet. Ask them to tap the photo they mean. " +
   "Never guess which one they mean.";
+const SEARCH_FIRST =
+  "The user asked for their latest / most recent photo. A photo shown earlier in this chat may not be the newest " +
+  "one, so it is not used. Call get_photo_candidates with latest true (and place, period or locationContext if they " +
+  "said them); if they also asked about what is in it, set question to their words so the NEW photo is looked at.";
 
-/** The photo a tool acts on: the one named (if it is the user's own), else the one being talked about. */
+/**
+ * The photo a tool acts on: the one named (if it is the user's own), else the one being talked about.
+ * Never for "my latest photo": that is whatever is newest on the phone now, found by a fresh search.
+ */
 async function resolvePhoto(ctx: ToolContext, id: string | undefined): Promise<ToolResult<PhotoReference>> {
+  if (ctx.run.recentPhoto) return fail("PHOTO_SEARCH_REQUIRED", SEARCH_FIRST);
   if (id) {
     const photo = await findUserPhoto(ctx.userId, id);
     return photo ? ok(photo) : fail("PHOTO_NOT_FOUND", "No photo with that id was found for this user.");
@@ -79,7 +94,9 @@ export function photoTools(ctx: ToolContext) {
         "yesterday', 'the photo from where I went today', 'send me that pic', 'show the latest picture', 'find " +
         "IMG_2041'. The phone searches only the photos the user allowed Child Assist to access, by date, by the " +
         "user's own saved places (locationContext/place) and by file name. It shows one strong match, asks the " +
-        "user to choose among several, or says none was found. You never see the photos.",
+        "user to choose among several, or says none was found. You never see the photos. When the user ALSO asks " +
+        "about what is in it ('show me today's photo and explain it', 'get the picture from Durgi and describe " +
+        "it'), pass their question too: the photo found is then looked at automatically, with no extra tap.",
       inputSchema: z.strictObject({
         period: z.enum(HISTORY_PERIODS).optional().describe("When the photo was taken, relative to today"),
         startDate: localDate("startDate").optional().describe("First local day (YYYY-MM-DD), instead of period"),
@@ -104,9 +121,15 @@ export function photoTools(ctx: ToolContext) {
               "content; the phone uses it to explain that and may show photos from the date or place instead.",
           ),
         latest: z.boolean().optional().describe("true for 'the latest / last / most recent photo'"),
+        question: photoQuestion
+          .optional()
+          .describe(
+            "Only when the user also asked about the photo's CONTENT (explain, describe, what is in it, read the " +
+              "text, what colour...): their question in their own words. Leave out for just finding or showing it.",
+          ),
       }),
       permission: PermissionType.PHOTOS,
-      execute: async ({ period, startDate, endDate, locationContext, place, fileName, visualHint, latest }, toolCtx) => {
+      execute: async ({ period, startDate, endDate, locationContext, place, fileName, visualHint, latest, question }, toolCtx) => {
         const { userId, zone } = toolCtx;
         const useLocation = locationContext === true || !!place;
         if (useLocation && !(await hasPermission(userId, PermissionType.LOCATION))) {
@@ -147,7 +170,10 @@ export function photoTools(ctx: ToolContext) {
             }));
         }
 
-        const request = await preparePhotoSearch(toolCtx);
+        // "My latest / most recent photo" means the newest one, even when the model left latest out.
+        const newest = latest === true || toolCtx.run.recentPhoto === true;
+        const request = await preparePhotoSearch(toolCtx, question);
+        toolCtx.run.photoSearch = { requestId: request.id, question: question ?? null };
         return ok({
           handledOnDevice: true,
           requestId: request.id,
@@ -157,15 +183,21 @@ export function photoTools(ctx: ToolContext) {
             startDate: instants?.since.toISOString() ?? null,
             endDate: instants?.before.toISOString() ?? null,
             locationContext: useLocation,
-            latest: latest === true,
+            latest: newest,
+            // Also set after the turn (settlePhotoTurn): the photo found is looked at automatically.
+            analyze: !!question,
           },
           visits,
           note:
             "The Child Assist app is searching the user's own photos on their phone and shows the result below your " +
             "reply: one strong match is shown as a photo card; several are shown for the user to choose from; if " +
             "none match it says so. You cannot see the photos or the result: never describe, count, name or guess " +
-            "photos, never say a photo was found, and never say it was taken somewhere. Reply with one short " +
-            "sentence such as \"Let me find that photo.\" in the user's language.",
+            "photos, never say a photo was found, and never say it was taken somewhere. " +
+            (question
+              ? "The photo found is then looked at automatically and the answer from the real image appears below; " +
+                "never ask the user to request the explanation again. Reply with one short sentence such as " +
+                "\"Let me find that photo and look at it.\" in the user's language."
+              : "Reply with one short sentence such as \"Let me find that photo.\" in the user's language."),
         });
       },
     }),
@@ -191,7 +223,9 @@ export function photoTools(ctx: ToolContext) {
       name: "analyze_photo",
       kind: "photo_analysis",
       display: (data) => {
-        const d = data as { requestId: string; photoId: string };
+        const d = data as { requestId?: string; photoId?: string };
+        // Answered later: by the photo this turn's search finds, or the one the user picks.
+        if (!d.requestId || !d.photoId) return { status: "success" };
         return { status: "device_lookup", data: { requestId: d.requestId, photoId: d.photoId } };
       },
       description:
@@ -204,19 +238,42 @@ export function photoTools(ctx: ToolContext) {
         photoId: photoId
           .optional()
           .describe("Leave out for 'this photo' / 'it' / 'that picture': the photo shown or picked in this chat"),
-        // Quotes are fine here ('what does the "EXIT" sign say?'): it is sent as plain text, never in a block.
-        question: z
-          .string()
-          .trim()
-          .min(1)
-          .max(500)
-          .regex(/^[^\u0000-\u001f\u007f]+$/)
-          .describe("The user's question in their own words and language"),
+        question: photoQuestion.describe("The user's question in their own words and language"),
       }),
       permission: PermissionType.PHOTOS,
       execute: async ({ photoId: id, question }, toolCtx) => {
+        // Searched for in this same turn ("find the Durgi photo and explain it"): "this photo" is the
+        // one being found, not an older one, even if the model named an earlier photo for "my latest
+        // photo". Its question goes with the search (settlePhotoTurn).
+        if ((!id || toolCtx.run.recentPhoto) && toolCtx.run.toolsUsed.includes("get_photo_candidates")) {
+          toolCtx.run.photoQuestion ??= question;
+          return ok({
+            handledOnDevice: true,
+            note:
+              "The photo is still being found on the user's phone. Once it is found it is looked at automatically " +
+              "and the answer from the real image appears below your reply. Never describe it yourself and never " +
+              "ask the user to request the explanation again. Reply with one short sentence such as \"Let me find " +
+              "that photo and look at it.\" in the user's language.",
+          });
+        }
         const photo = await resolvePhoto(toolCtx, id);
-        if (!photo.success) return photo;
+        if (!photo.success) {
+          // Several shown, none picked: the question waits, and picking one answers it.
+          if (
+            !id &&
+            photo.code === "NO_PHOTO_SELECTED" &&
+            (await awaitPhotoChoice(toolCtx.userId, toolCtx.conversationId, question))
+          ) {
+            return ok({
+              awaitingChoice: true,
+              note:
+                "Several photos were shown and the user has not picked one yet. Ask them to tap the photo they mean; " +
+                "it is then looked at automatically and the answer from the real image appears. Never guess which " +
+                "one they mean and never describe a photo yourself.",
+            });
+          }
+          return photo;
+        }
         const request = await preparePhotoAnalysis(toolCtx, photo.data.id, question);
         return ok({
           handledOnDevice: true,

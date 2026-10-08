@@ -11,10 +11,12 @@ import { addMessage, type MessageRecord } from "../chat.service";
 import { guardReply } from "../guardrails/guardrails";
 import type { ToolContext } from "../tools/types";
 import { answerFromImage, detectImageType, MAX_IMAGE_BYTES, MIN_IMAGE_BYTES } from "./photo-answer";
+import { photoAnalysisQuestion } from "./photo-intent";
 import {
   findUserPhoto,
   MAX_PHOTOS_PER_SEARCH,
   newPhotoId,
+  selectPhoto,
   toPhotoView,
   type PhotoView,
   type PlaceEvidence,
@@ -29,6 +31,11 @@ import {
 //   ANALYZE: the phone sends the ONE photo being talked about, scaled down, and Gemini vision
 //            answers the question from the image. The image is never stored or logged; only the
 //            answer is kept, as the assistant's chat message.
+//
+// "Find it AND explain it" in one request: the search carries the user's question. When the phone
+// reports a single match, an ANALYZE request for it is opened straight away; with several, the
+// question waits on the shown photos and picking one opens it. Either way the phone is handed the
+// analysis request and sends that photo without the user tapping Analyze.
 //
 //   PENDING ──results/answer──▶ COMPLETED | FAILED      PENDING ──fail──▶ FAILED | CANCELLED
 //   PENDING ──10 minutes──▶ EXPIRED
@@ -57,7 +64,7 @@ export async function expireStalePhotoRequests(now = new Date()): Promise<void> 
 }
 
 async function open(
-  ctx: ToolContext,
+  ctx: Pick<ToolContext, "userId" | "conversationId">,
   kind: PhotoRequestKind,
   extra: { photoId?: string; question?: string } = {},
 ): Promise<PhotoRequestView> {
@@ -75,12 +82,51 @@ async function open(
   return toView(request);
 }
 
-/** Opens a request for the phone to search its gallery (chat turn). Reads nothing itself. */
-export const preparePhotoSearch = (ctx: ToolContext) => open(ctx, PhotoRequestKind.SEARCH);
+/**
+ * Opens a request for the phone to search its gallery (chat turn). Reads nothing itself. With a
+ * [question], the photo it finds is looked at automatically.
+ */
+export const preparePhotoSearch = (ctx: ToolContext, question?: string) =>
+  open(ctx, PhotoRequestKind.SEARCH, question ? { question } : {});
 
-/** Opens a request for the phone to send the one photo [photoId] for a question (chat turn). */
-export const preparePhotoAnalysis = (ctx: ToolContext, photoId: string, question: string) =>
-  open(ctx, PhotoRequestKind.ANALYZE, { photoId, question });
+/** Opens a request for the phone to send the one photo [photoId] for a question. */
+export const preparePhotoAnalysis = (
+  ctx: Pick<ToolContext, "userId" | "conversationId">,
+  photoId: string,
+  question: string,
+) => open(ctx, PhotoRequestKind.ANALYZE, { photoId, question });
+
+/** An analysis the phone must answer now, without the user tapping Analyze. */
+export interface PhotoAnalysisTicket {
+  requestId: string;
+  photoId: string;
+}
+
+/**
+ * After the model's turn: a search opened this turn carries the user's question when they also
+ * asked about the photo's content, whether the model passed it, asked it with analyze_photo in the
+ * same turn, or (backstop) the message itself explicitly asks to explain / describe / read it. The
+ * app is told, so it does not offer an Analyze button for a question already being answered.
+ */
+export async function settlePhotoTurn(run: ToolContext["run"], userId: string, message: string): Promise<void> {
+  const search = run.photoSearch;
+  if (!search) return;
+  const question = search.question ?? run.photoQuestion ?? photoAnalysisQuestion(message);
+  if (!question) return;
+  if (!search.question) {
+    await prisma.photoRequest.updateMany({
+      where: { id: search.requestId, userId, kind: PhotoRequestKind.SEARCH, status: PhotoRequestStatus.PENDING },
+      data: { question: question.slice(0, 500) },
+    });
+    search.question = question;
+  }
+  for (const event of run.events) {
+    const query = event.data?.query;
+    if (event.kind === "photos" && event.data?.requestId === search.requestId && query && typeof query === "object") {
+      (query as Record<string, unknown>).analyze = true;
+    }
+  }
+}
 
 export interface RequestScope {
   conversationId?: string;
@@ -197,7 +243,12 @@ export async function recordPhotoSearch(
   id: string,
   report: PhotoSearchReport,
   scope: RequestScope = {},
-): Promise<{ request: PhotoRequestView; photos: PhotoView[]; message: MessageRecord | null }> {
+): Promise<{
+  request: PhotoRequestView;
+  photos: PhotoView[];
+  message: MessageRecord | null;
+  analysis: PhotoAnalysisTicket | null;
+}> {
   const found = report.outcome === "found";
   if (found && report.photos.length === 0) throw new HttpError(400, "A found result needs at least one photo.");
   if (!found && report.photos.length > 0) throw new HttpError(400, "Only a found result can list photos.");
@@ -222,6 +273,8 @@ export async function recordPhotoSearch(
               placeName: p.place?.name ?? null,
               placeEvidence: p.place ? p.place.evidence.toUpperCase() : null,
               selectedAt: single ? now : null,
+              // Several shown: the question waits until the user picks the one they mean.
+              analysisQuestion: !single && request.question ? request.question : null,
             },
           }),
         ),
@@ -229,7 +282,65 @@ export async function recordPhotoSearch(
     : [];
   await finish(userId, id, report.outcome === "failed" ? PhotoRequestStatus.FAILED : PhotoRequestStatus.COMPLETED);
   const message = await note(userId, request.conversationId, searchNote(report));
-  return { request: toView(await load(userId, id, PhotoRequestKind.SEARCH, scope)), photos: rows.map(toPhotoView), message };
+  // One match for "find it and explain it": look at it now. Never for none or several.
+  const analysis =
+    single && found && request.question
+      ? await openAnalysis({ userId, conversationId: request.conversationId }, rows[0].id, request.question)
+      : null;
+  return {
+    request: toView(await load(userId, id, PhotoRequestKind.SEARCH, scope)),
+    photos: rows.map(toPhotoView),
+    message,
+    analysis,
+  };
+}
+
+async function openAnalysis(
+  ctx: Pick<ToolContext, "userId" | "conversationId">,
+  photoId: string,
+  question: string,
+): Promise<PhotoAnalysisTicket> {
+  const request = await preparePhotoAnalysis(ctx, photoId, question);
+  return { requestId: request.id, photoId };
+}
+
+/**
+ * The user picked [id] among the photos shown. If they had asked about the photo's content
+ * ("which one is from Durgi? explain it"), the analysis of the picked photo opens at once.
+ */
+export async function choosePhotoInChat(
+  userId: string,
+  id: string,
+  scope: RequestScope = {},
+): Promise<{ photo: PhotoView; analysis: PhotoAnalysisTicket | null }> {
+  const photo = await selectPhoto(userId, id, scope);
+  const row = await findUserPhoto(userId, id);
+  const analysis = row?.analysisQuestion
+    ? await openAnalysis({ userId, conversationId: row.conversationId }, row.id, row.analysisQuestion)
+    : null;
+  return { photo, analysis };
+}
+
+/**
+ * "Explain it" while several photos are shown and none is picked yet: the question waits on
+ * those photos, so picking one answers it. Returns false when there is nothing to choose from.
+ */
+export async function awaitPhotoChoice(userId: string, conversationId: string, question: string): Promise<boolean> {
+  const selected = await prisma.photoReference.findFirst({
+    where: { userId, conversationId, selectedAt: { not: null } },
+    orderBy: [{ selectedAt: "desc" }, { id: "desc" }],
+    select: { selectedAt: true },
+  });
+  const { count } = await prisma.photoReference.updateMany({
+    where: {
+      userId,
+      conversationId,
+      selectedAt: null,
+      ...(selected?.selectedAt ? { createdAt: { gt: selected.selectedAt } } : {}),
+    },
+    data: { analysisQuestion: question.slice(0, 500) },
+  });
+  return count > 0;
 }
 
 // ---------------------------------------------------------------------------------------------

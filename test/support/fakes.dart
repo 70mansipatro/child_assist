@@ -685,7 +685,14 @@ class FakeBackend {
       for (final event in reply.toolEvents) {
         final data = event['data'];
         if (event['kind'] == 'photos' && data is Map && data['requestId'] is String) {
-          photoSearchStore[data['requestId'] as String] = {'userId': userId, 'conversationId': conversation['id'], 'status': 'PENDING'};
+          final query = data['query'];
+          photoSearchStore[data['requestId'] as String] = {
+            'userId': userId,
+            'conversationId': conversation['id'],
+            'status': 'PENDING',
+            // Like the server: "find it and explain it" carries the user's question.
+            if (query is Map && query['analyze'] == true) 'question': message,
+          };
         }
         if (event['kind'] == 'photo_analysis' && data is Map && data['requestId'] is String) {
           photoAnalysisStore[data['requestId'] as String] = {
@@ -758,7 +765,11 @@ class FakeBackend {
       photoCalls.add('select ${select.group(1)}');
       if (photo == null || photo['userId'] != userId) return _json(404, {'message': 'Photo not found'});
       photo['selected'] = true;
-      return _json(200, {'photo': {'id': select.group(1), 'selected': true}});
+      final question = photo['question'] as String?;
+      return _json(200, {
+        'photo': {'id': select.group(1), 'selected': true},
+        'analysis': question == null ? null : _openPhotoAnalysis(userId, photo['conversationId'] as String, select.group(1)!, question),
+      });
     }
     final analysis = RegExp(r'^/api/chat/photo-analyses/([^/]+)/(answer|fail)$').firstMatch(path);
     if (analysis != null && req.method == 'POST') {
@@ -817,9 +828,16 @@ class FakeBackend {
     if (r['status'] != 'PENDING') return _json(409, {'message': 'This request has already been handled.'});
     r['status'] = 'COMPLETED';
     final ids = <String>[];
+    final question = r['question'] as String?;
     for (var i = 0; i < photos.length; i++) {
       final photoId = 'photo_${(_nextPhotoId++).toRadixString(16).padLeft(20, '0')}';
-      photoStore[photoId] = {'userId': userId, 'conversationId': r['conversationId'], 'selected': photos.length == 1};
+      photoStore[photoId] = {
+        'userId': userId,
+        'conversationId': r['conversationId'],
+        'selected': photos.length == 1,
+        // Several shown: the question waits until the user picks one.
+        if (photos.length > 1 && question != null) 'question': question,
+      };
       ids.add(photoId);
     }
     final note = switch (body['outcome']) {
@@ -832,7 +850,26 @@ class FakeBackend {
     return _json(200, {
       'photos': [for (final i in ids) {'id': i, 'selected': photos.length == 1}],
       'message': _note(userId, r['conversationId'] as String, note),
+      'analysis': ids.length == 1 && question != null
+          ? _openPhotoAnalysis(userId, r['conversationId'] as String, ids.single, question)
+          : null,
     });
+  }
+
+  int _nextAutoAnalysis = 1;
+
+  /// Like the server: an analysis opened without a chat turn, for a photo the user asked about.
+  Map<String, String> _openPhotoAnalysis(String userId, String conversationId, String photoId, String question) {
+    final id = 'auto-analysis-${_nextAutoAnalysis++}';
+    photoAnalysisStore[id] = {
+      'userId': userId,
+      'conversationId': conversationId,
+      'status': 'PENDING',
+      'photoId': photoId,
+      'question': question,
+    };
+    photoCalls.add('auto-analysis $id $photoId');
+    return {'requestId': id, 'photoId': photoId};
   }
 
   http.Response _handlePhotoAnalysis(String id, String verb, Map<String, dynamic> body, String userId) {
@@ -1373,6 +1410,18 @@ class FakePhotoLibrary implements PhotoLibrary {
                 p.createdAt.isBefore(range.end.add(const Duration(days: 1))))
             .toList();
     return matching.skip(page * pageSize).take(pageSize).toList();
+  }
+
+  /// Like the real gallery: newest by when each photo was TAKEN, whatever order [photos] is in
+  /// (e.g. an old photo added to the gallery after a newer one was taken).
+  @override
+  Future<List<PhotoItem>> newest(int count) async {
+    queries.add('newest $count');
+    if (pageFailures > 0) {
+      pageFailures--;
+      throw Exception('gallery unavailable');
+    }
+    return (List.of(photos)..sort((a, b) => b.createdAt.compareTo(a.createdAt))).take(count).toList();
   }
 
   /// GPS positions stored in photos (by id). Photos not listed have none, as on a real phone.

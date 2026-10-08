@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -90,6 +91,7 @@ class PhotoSearchState {
     this.limited = false,
     this.selectedId,
     this.contentHint = false,
+    this.analyses = const {},
   });
 
   final PhotoSearchPhase phase;
@@ -110,7 +112,11 @@ class PhotoSearchState {
   /// The user described what is IN the photo, which cannot be searched for.
   final bool contentHint;
 
-  PhotoSearchState selecting(String id) => PhotoSearchState(
+  /// Photos being looked at automatically because the user asked about them: photo id to the
+  /// analysis request id. Such a photo shows the analysis instead of an Analyze button.
+  final Map<String, String> analyses;
+
+  PhotoSearchState selecting(String id, {PhotoAnalysisTicket? analysis}) => PhotoSearchState(
         phase,
         photos: photos,
         total: total,
@@ -118,6 +124,7 @@ class PhotoSearchState {
         limited: limited,
         selectedId: id,
         contentHint: contentHint,
+        analyses: analysis == null ? analyses : {...analyses, analysis.photoId: analysis.requestId},
       );
 }
 
@@ -155,6 +162,10 @@ class ChatSession extends ChangeNotifier {
   final PhotoGalleryService? _gallery;
 
   static const documentUnavailableMessage = 'This document is no longer available. Nothing was shared.';
+
+  /// Called with an answer that arrives after its turn, such as what a photo shows once the phone
+  /// sent it, so it can be read aloud like any other reply.
+  void Function(ChatMessage message)? onLateReply;
 
   String? _conversationId;
   String? _title;
@@ -476,6 +487,9 @@ class ChatSession extends ChangeNotifier {
 
     final PhotoMatchResult result;
     try {
+      // Every search reads the gallery as it is now: photos taken, added or deleted since the
+      // last one count, and nothing listed earlier is trusted.
+      gallery.reset();
       final photos = await _loadCandidates(gallery, query);
       final positions = <String, PhotoPosition?>{};
       if (query.locationContext && query.visits.isNotEmpty) {
@@ -483,7 +497,7 @@ class ChatSession extends ChangeNotifier {
           positions[p.id] = await gallery.location(p);
         }
       }
-      result = PhotoMatcher.match(photos, query, positions: positions);
+      result = await _readableMatches(gallery, photos, query, positions);
     } on PhotoGalleryException {
       await _reportPhotoSearch(requestId, 'failed');
       return _photoSearchFailed(requestId, "I couldn't read the photos on your phone.");
@@ -503,9 +517,9 @@ class ChatSession extends ChangeNotifier {
       return;
     }
 
-    final List<String> ids;
+    final ({List<String> ids, PhotoAnalysisTicket? analysis}) reported;
     try {
-      ids = await _service.reportPhotoSearch(
+      reported = await _service.reportPhotoSearch(
         requestId,
         outcome: 'found',
         photos: [for (final m in result.matches) m.toReport()],
@@ -521,10 +535,11 @@ class ChatSession extends ChangeNotifier {
             : "I couldn't finish finding your photo. Check your internet connection and ask again.",
       );
     }
-    final shown = [for (final (i, m) in result.matches.indexed) m.withId(ids[i])];
+    final shown = [for (final (i, m) in result.matches.indexed) m.withId(reported.ids[i])];
     for (final p in shown) {
       _photos[p.id!] = p;
     }
+    final analysis = reported.analysis;
     _setPhotoSearch(
       requestId,
       PhotoSearchState(
@@ -534,8 +549,11 @@ class ChatSession extends ChangeNotifier {
         limited: limited,
         selectedId: shown.length == 1 ? shown.single.id : null,
         contentHint: contentHint,
+        analyses: analysis == null ? const {} : {analysis.photoId: analysis.requestId},
       ),
     );
+    // "Find it and explain it": the one photo found is looked at now, no Analyze tap.
+    if (analysis != null) await startPhotoAnalysis(analysis.requestId, analysis.photoId);
   }
 
   /// The user picked one of several photos: it becomes the photo being talked about.
@@ -543,23 +561,29 @@ class ChatSession extends ChangeNotifier {
   Future<String?> choosePhoto(String requestId, ChatPhoto photo) async {
     final state = _photoSearches[requestId];
     if (state == null || photo.id == null) return null;
+    final PhotoAnalysisTicket? analysis;
     try {
-      await _service.selectPhoto(photo.id!, conversationId: _conversationId);
+      analysis = await _service.selectPhoto(photo.id!, conversationId: _conversationId);
     } on ApiException catch (e) {
       return e.statusCode == null ? 'Check your internet connection and try again.' : e.message;
     }
-    _setPhotoSearch(requestId, state.selecting(photo.id!));
+    _setPhotoSearch(requestId, (_photoSearches[requestId] ?? state).selecting(photo.id!, analysis: analysis));
+    // They had asked about the photo ("explain it"): the one they picked is looked at now.
+    if (analysis != null) unawaited(startPhotoAnalysis(analysis.requestId, analysis.photoId));
     return null;
   }
 
   /// "Analyze" on a photo card: makes it the photo being talked about, then asks about it.
   Future<void> analyzePhoto(ChatPhoto photo) async {
     if (photo.id == null || _sending) return;
+    PhotoAnalysisTicket? analysis;
     try {
-      await _service.selectPhoto(photo.id!, conversationId: _conversationId);
+      analysis = await _service.selectPhoto(photo.id!, conversationId: _conversationId);
     } catch (_) {
       // The question still goes through; the server then uses the photo it last knew about.
     }
+    // A question about this photo was already waiting: answer that one instead of asking again.
+    if (analysis != null) return startPhotoAnalysis(analysis.requestId, analysis.photoId);
     await send('What is in this photo?');
   }
 
@@ -590,6 +614,7 @@ class ChatSession extends ChangeNotifier {
       if (generation != _generation) return;
       _messages = [..._messages, answer];
       _setPhotoAnalysis(requestId, PhotoAnalysisState(PhotoAnalysisPhase.answered, photo: photo));
+      onLateReply?.call(answer);
     } catch (e) {
       if (generation != _generation) return;
       final message = e is ApiException && e.statusCode != null
@@ -630,7 +655,9 @@ class ChatSession extends ChangeNotifier {
       range = DateTimeRange(start: start, end: DateUtils.dateOnly(end.subtract(const Duration(microseconds: 1))));
     }
     final deep = range != null || query.fileName != null || query.locationContext;
-    final pages = deep ? _maxSearchPages : 1;
+    // "My latest / recent photo": the newest by when each photo was actually taken.
+    if (!deep) return gallery.loadNewest();
+    const pages = _maxSearchPages;
     final photos = <PhotoItem>[];
     for (var i = 0; i < pages; i++) {
       final page = await gallery.loadPage(i, range: range);
@@ -639,6 +666,36 @@ class ChatSession extends ChangeNotifier {
     }
     return photos;
   }
+
+  /// The matches for [query], leaving out photos that can no longer be read (deleted since, or
+  /// listed by the OS but unreadable), so "the latest photo" is the newest one that can be shown.
+  Future<PhotoMatchResult> _readableMatches(
+    PhotoGalleryService gallery,
+    List<PhotoItem> photos,
+    PhotoSearchQuery query,
+    Map<String, PhotoPosition?> positions,
+  ) async {
+    final gone = <String>{};
+    var result = PhotoMatcher.match(photos, query, positions: positions);
+    for (var attempt = 0; attempt < _maxReadableRetries; attempt++) {
+      final unreadable = <String>{
+        for (final m in result.matches)
+          if (!await gallery.isReadable(m.item)) m.item.id,
+      };
+      if (unreadable.isEmpty) return result;
+      gone.addAll(unreadable);
+      result = PhotoMatcher.match([for (final p in photos) if (!gone.contains(p.id)) p], query, positions: positions);
+    }
+    // Still finding unreadable ones: show only those that could be read, never a broken one.
+    final readable = [
+      for (final m in result.matches)
+        if (await gallery.isReadable(m.item)) m,
+    ];
+    return PhotoMatchResult(readable, total: readable.isEmpty ? 0 : result.total, reason: result.reason);
+  }
+
+  /// Rounds of skipping unreadable photos for one search at most.
+  static const _maxReadableRetries = 5;
 
   static String _noMatchMessage(PhotoNoMatchReason? reason, bool limited) {
     final parts = [

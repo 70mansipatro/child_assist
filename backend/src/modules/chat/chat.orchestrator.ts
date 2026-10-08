@@ -19,6 +19,8 @@ import {
   type MessageRecord,
 } from "./chat.service";
 import { checkRules, checkWithModel, guardReply, refusalFor, type GuardrailCategory } from "./guardrails/guardrails";
+import { asksForRecentPhoto } from "./photos/photo-intent";
+import { settlePhotoTurn } from "./photos/photo-requests";
 import { buildChatTools } from "./tools";
 import type { PendingActionView, ToolContext, ToolEvent } from "./tools/types";
 
@@ -151,7 +153,7 @@ export async function handleChatTurn(userId: string, input: ChatTurnInput): Prom
 
   let outcome: { text: string; run: ToolContext["run"] };
   try {
-    outcome = await runWithFallback(userId, conversationId, zone, [models.chat, models.fallback], instructions, history);
+    outcome = await runWithFallback(userId, conversationId, zone, [models.chat, models.fallback], instructions, history, stripWakeWords(text));
   } catch (err) {
     await titlePromise?.catch(() => undefined);
     await rollback();
@@ -173,11 +175,17 @@ async function runWithFallback(
   candidates: Array<LanguageModel | undefined>,
   instructions: string,
   messages: ModelMessage[],
+  userText: string,
 ): Promise<{ text: string; run: ToolContext["run"] }> {
   let lastError: unknown = new Error("No chat model configured");
   for (const model of candidates) {
     if (!model) continue;
-    const ctx: ToolContext = { userId, conversationId, zone, run: { toolsUsed: [], pendingActions: [], events: [] } };
+    const ctx: ToolContext = {
+      userId,
+      conversationId,
+      zone,
+      run: { toolsUsed: [], pendingActions: [], events: [], recentPhoto: asksForRecentPhoto(userText) },
+    };
     try {
       const result = await generateText({
         model,
@@ -187,6 +195,11 @@ async function runWithFallback(
         stopWhen: isStepCount(chatSettings.maxSteps),
         timeout: { totalMs: chatSettings.timeoutMs },
         maxRetries: 1,
+      });
+      // "Find it and explain it": the photo the phone finds is looked at without another tap.
+      // Never a reason to run the turn again on the fallback model: the Analyze button still works.
+      await settlePhotoTurn(ctx.run, userId, userText).catch((err: unknown) => {
+        console.error(`Photo turn settle failed: ${err instanceof Error ? err.name : "Error"}`);
       });
       return { text: result.text, run: ctx.run };
     } catch (err) {

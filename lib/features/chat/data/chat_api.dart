@@ -193,8 +193,9 @@ class ChatApi {
 
   /// For a photo search on this phone: what it showed. Only the metadata of the shown photos is
   /// sent (when taken, size, the matched saved place): never images, file names, paths or URIs.
-  /// Returns the server's opaque id for each shown photo, in the same order.
-  Future<List<String>> reportPhotoSearch(
+  /// Returns the server's opaque id for each shown photo, in the same order, and the analysis to
+  /// run now when the user also asked about the photo and exactly one was shown.
+  Future<({List<String> ids, PhotoAnalysisTicket? analysis})> reportPhotoSearch(
     String token,
     String requestId, {
     required String outcome,
@@ -221,16 +222,20 @@ class ChatApi {
         if (p['id'] is String) p['id'] as String,
     ];
     if (ids.length != photos.length) throw ApiException('Something went wrong. Please try again.');
-    return ids;
+    final analysis = PhotoAnalysisTicket.tryParse(json['analysis']);
+    return (ids: ids, analysis: analysis != null && ids.contains(analysis.photoId) ? analysis : null);
   }
 
   /// The user picked [photoId] among the photos shown: it becomes the photo being talked about.
-  Future<void> selectPhoto(String token, String photoId, {String? conversationId}) async {
-    await _client.post(
+  /// Returns the analysis to run now if they had asked about the photo's content.
+  Future<PhotoAnalysisTicket?> selectPhoto(String token, String photoId, {String? conversationId}) async {
+    final json = await _client.post(
       '/api/chat/photos/${Uri.encodeComponent(photoId)}/select',
       token: token,
       body: {'conversationId': ?conversationId},
     );
+    final analysis = PhotoAnalysisTicket.tryParse(json['analysis']);
+    return analysis?.photoId == photoId ? analysis : null;
   }
 
   /// For a question about a photo: the ONE photo being asked about, scaled down, as base64. The

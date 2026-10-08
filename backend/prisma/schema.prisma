@@ -12,25 +12,25 @@ datasource db {
 }
 
 model User {
-  id              String   @id @default(uuid()) @db.Uuid
-  email           String   @unique
-  name            String?
+  id                            String   @id @default(uuid()) @db.Uuid
+  email                         String   @unique
+  name                          String?
   // Null for accounts created with "Continue with Google".
-  passwordHash    String?  @map("password_hash")
+  passwordHash                  String?  @map("password_hash")
   // Google's stable account ID (the verified ID token's `sub`), for accounts that sign in with
   // Google. Never the email, and no Google tokens are stored.
-  googleSubject   String?  @unique @map("google_subject")
+  googleSubject                 String?  @unique @map("google_subject")
   // Password accounts must prove they own the address (6-digit emailed code) before they can log
   // in. Google accounts are verified by Google, and accounts created before verification existed
   // were marked verified by the email_verification migration.
-  emailVerified   Boolean  @default(false) @map("email_verified")
+  emailVerified                 Boolean  @default(false) @map("email_verified")
   // Reference to an externally hosted image only; image bytes are never stored in the database.
-  profileImageUrl String?  @map("profile_image_url")
+  profileImageUrl               String?  @map("profile_image_url")
   // Whether the user has been through the first-time permission walkthrough once. Separate from
   // the per-permission statuses in user_permissions: a completed user may still have denials.
-  permissionOnboardingCompleted Boolean @default(false) @map("permission_onboarding_completed")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  permissionOnboardingCompleted Boolean  @default(false) @map("permission_onboarding_completed")
+  createdAt                     DateTime @default(now()) @map("created_at")
+  updatedAt                     DateTime @updatedAt @map("updated_at")
 
   permissions       UserPermission[]
   locations         LocationHistory[]
@@ -44,9 +44,9 @@ model User {
   emailVerificationCodes EmailVerificationCode[]
   passwordResetCodes     PasswordResetCode[]
 
-  notificationDevices     NotificationDevice[]
-  notifications           Notification[]
-  notificationPreference  NotificationPreference?
+  notificationDevices    NotificationDevice[]
+  notifications          Notification[]
+  notificationPreference NotificationPreference?
 
   @@map("users")
 }
@@ -143,25 +143,25 @@ enum LocationSource {
 // No device identifiers. The place fields come from the device's own reverse geocoder and may
 // all be null.
 model LocationHistory {
-  id         String   @id @default(uuid()) @db.Uuid
-  userId     String   @map("user_id") @db.Uuid
+  id         String         @id @default(uuid()) @db.Uuid
+  userId     String         @map("user_id") @db.Uuid
   // Rows saved before automatic history existed were all manual, hence the default.
   source     LocationSource @default(MANUAL)
-  latitude   Decimal  @db.Decimal(10, 7)
-  longitude  Decimal  @db.Decimal(10, 7)
+  latitude   Decimal        @db.Decimal(10, 7)
+  longitude  Decimal        @db.Decimal(10, 7)
   // Horizontal accuracy radius in metres, if the device reported one.
-  accuracy   Decimal? @db.Decimal(10, 2)
-  placeName  String?  @map("place_name") @db.VarChar(255)
-  address    String?  @db.VarChar(1000)
-  street     String?  @db.VarChar(255)
-  locality   String?  @db.VarChar(255)
-  city       String?  @db.VarChar(255)
-  state      String?  @db.VarChar(255)
-  postalCode String?  @map("postal_code") @db.VarChar(32)
-  country    String?  @db.VarChar(255)
+  accuracy   Decimal?       @db.Decimal(10, 2)
+  placeName  String?        @map("place_name") @db.VarChar(255)
+  address    String?        @db.VarChar(1000)
+  street     String?        @db.VarChar(255)
+  locality   String?        @db.VarChar(255)
+  city       String?        @db.VarChar(255)
+  state      String?        @db.VarChar(255)
+  postalCode String?        @map("postal_code") @db.VarChar(32)
+  country    String?        @db.VarChar(255)
   // When the device took the reading (client clock); createdAt is when the server stored it.
-  capturedAt DateTime @map("captured_at")
-  createdAt  DateTime @default(now()) @map("created_at")
+  capturedAt DateTime       @map("captured_at")
+  createdAt  DateTime       @default(now()) @map("created_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -181,22 +181,22 @@ enum ChatMessageRole {
 }
 
 model ChatConversation {
-  id        String   @id @default(cuid())
-  userId    String   @map("user_id") @db.Uuid
-  title     String?  @db.VarChar(255)
+  id              String    @id @default(cuid())
+  userId          String    @map("user_id") @db.Uuid
+  title           String?   @db.VarChar(255)
   // Server-only memory for long chats: a short summary of the messages up to and including
   // summarizedUntil, so the model keeps their context without receiving every message. Written by
   // the backend (secrets redacted, no places or coordinates) and never returned to the app.
   summary         String?   @db.Text
   summarizedUntil DateTime? @map("summarized_until")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
 
-  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  messages  ChatMessage[]
-  toolCalls ChatToolCall[]
-  actions   ChatAction[]
-  documentReads DocumentReadRequest[]
+  user            User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages        ChatMessage[]
+  toolCalls       ChatToolCall[]
+  actions         ChatAction[]
+  documentReads   DocumentReadRequest[]
   photoReferences PhotoReference[]
   photoRequests   PhotoRequest[]
 
@@ -275,42 +275,42 @@ enum ChatActionChannel {
 }
 
 model ChatAction {
-  id               String            @id
-  userId           String            @map("user_id") @db.Uuid
-  conversationId   String            @map("conversation_id")
-  type             ChatActionType
-  channel          ChatActionChannel
-  status           ChatActionStatus  @default(PENDING)
+  id                 String            @id
+  userId             String            @map("user_id") @db.Uuid
+  conversationId     String            @map("conversation_id")
+  type               ChatActionType
+  channel            ChatActionChannel
+  status             ChatActionStatus  @default(PENDING)
   // The contact name the user said ("Mansi"), resolved on the phone when no address was given.
-  contactQuery     String?           @map("contact_query") @db.VarChar(120)
-  recipientName    String?           @map("recipient_name") @db.VarChar(120)
+  contactQuery       String?           @map("contact_query") @db.VarChar(120)
+  recipientName      String?           @map("recipient_name") @db.VarChar(120)
   // An email address (EMAIL) or phone number (WHATSAPP). Null until the app resolves the contact.
-  recipientAddress String?           @map("recipient_address") @db.VarChar(320)
-  subject          String?           @db.VarChar(200)
-  message          String?           @db.Text
+  recipientAddress   String?           @map("recipient_address") @db.VarChar(320)
+  subject            String?           @db.VarChar(200)
+  message            String?           @db.Text
   // What sensitive data is included, e.g. "Today's travel history (3 saved locations)".
-  dataSummary      String?           @map("data_summary") @db.VarChar(300)
+  dataSummary        String?           @map("data_summary") @db.VarChar(300)
   // For SHARE_DOCUMENT: the document name the user mentioned, matched on the phone.
-  documentQuery    String?           @map("document_query") @db.VarChar(120)
+  documentQuery      String?           @map("document_query") @db.VarChar(120)
   // For SHARE_DOCUMENT: the one document the user picked on the phone, set once before Confirm.
   // The id is the app's opaque id for the document in that user's own on-device list, never a path
   // or URI; the phone shares exactly this document after Confirm. The name is shown for
   // confirmation and cleared when the action finishes.
-  documentId       String?           @map("document_id") @db.VarChar(64)
-  documentName     String?           @map("document_name") @db.VarChar(255)
-  documentType     String?           @map("document_type") @db.VarChar(8)  // For SHARE_CONTACT: the contact whose number is shared, kept apart from the recipient. The name
+  documentId         String?           @map("document_id") @db.VarChar(64)
+  documentName       String?           @map("document_name") @db.VarChar(255)
+  documentType       String?           @map("document_type") @db.VarChar(8) // For SHARE_CONTACT: the contact whose number is shared, kept apart from the recipient. The name
   // the user said is resolved on the phone; the picked name and number then build the message.
-  sharedContactQuery String?         @map("shared_contact_query") @db.VarChar(120)
-  sharedContactName  String?         @map("shared_contact_name") @db.VarChar(120)
-  sharedContactPhone String?         @map("shared_contact_phone") @db.VarChar(32)
+  sharedContactQuery String?           @map("shared_contact_query") @db.VarChar(120)
+  sharedContactName  String?           @map("shared_contact_name") @db.VarChar(120)
+  sharedContactPhone String?           @map("shared_contact_phone") @db.VarChar(32)
   // For SHARE_PHOTO: the server's opaque id of the photo (a PhotoReference of this user), set when
   // the action is prepared. Never a path, URI or device id: the phone resolves it locally.
-  photoId          String?           @map("photo_id") @db.VarChar(40)
-  expiresAt        DateTime          @map("expires_at")
-  confirmedAt      DateTime?         @map("confirmed_at")
-  completedAt      DateTime?         @map("completed_at")
-  createdAt        DateTime          @default(now()) @map("created_at")
-  updatedAt        DateTime          @updatedAt @map("updated_at")
+  photoId            String?           @map("photo_id") @db.VarChar(40)
+  expiresAt          DateTime          @map("expires_at")
+  confirmedAt        DateTime?         @map("confirmed_at")
+  completedAt        DateTime?         @map("completed_at")
+  createdAt          DateTime          @default(now()) @map("created_at")
+  updatedAt          DateTime          @updatedAt @map("updated_at")
 
   user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
@@ -378,20 +378,20 @@ model NotificationDevice {
 // addresses, contact details, chat content, codes or tokens. The app loads any details itself,
 // authenticated, after the user opens the notification.
 model Notification {
-  id        String           @id @default(uuid()) @db.Uuid
-  userId    String           @map("user_id") @db.Uuid
-  type      NotificationType
-  title     String           @db.VarChar(120)
-  body      String           @db.VarChar(300)
+  id           String           @id @default(uuid()) @db.Uuid
+  userId       String           @map("user_id") @db.Uuid
+  type         NotificationType
+  title        String           @db.VarChar(120)
+  body         String           @db.VarChar(300)
   // An internal childassist:// route, e.g. childassist://location.
-  deepLink  String?          @map("deep_link") @db.VarChar(200)
+  deepLink     String?          @map("deep_link") @db.VarChar(200)
   // Non-sensitive extras only (e.g. which permission changed).
-  metadataJson Json?         @map("metadata_json")
+  metadataJson Json?            @map("metadata_json")
   // One business event creates at most one notification: e.g. "tracking started" is not
   // repeated for every location callback. Unique per user.
-  dedupeKey String?          @map("dedupe_key") @db.VarChar(200)
-  readAt    DateTime?        @map("read_at")
-  createdAt DateTime         @default(now()) @map("created_at")
+  dedupeKey    String?          @map("dedupe_key") @db.VarChar(200)
+  readAt       DateTime?        @map("read_at")
+  createdAt    DateTime         @default(now()) @map("created_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -472,20 +472,23 @@ model DocumentReadRequest {
 // the mapping from that id to its own gallery entry. Every row belongs to the user from the JWT.
 
 model PhotoReference {
-  id             String    @id @db.VarChar(40)
-  userId         String    @map("user_id") @db.Uuid
-  conversationId String    @map("conversation_id")
-  capturedAt     DateTime  @map("captured_at")
-  width          Int?
-  height         Int?
+  id               String    @id @db.VarChar(40)
+  userId           String    @map("user_id") @db.Uuid
+  conversationId   String    @map("conversation_id")
+  capturedAt       DateTime  @map("captured_at")
+  width            Int?
+  height           Int?
   // The user's own saved place the photo was matched to, and how ("GPS": the photo's own GPS
   // metadata was near it; "TIME": taken close in time to it). Null when not matched to a place.
-  placeName      String?   @map("place_name") @db.VarChar(255)
-  placeEvidence  String?   @map("place_evidence") @db.VarChar(8)
+  placeName        String?   @map("place_name") @db.VarChar(255)
+  placeEvidence    String?   @map("place_evidence") @db.VarChar(8)
   // When the user picked it (or it was the only match): the photo now being talked about.
-  selectedAt     DateTime? @map("selected_at")
-  createdAt      DateTime  @default(now()) @map("created_at")
-  updatedAt      DateTime  @updatedAt @map("updated_at")
+  selectedAt       DateTime? @map("selected_at")
+  // The user asked about the photo's content ("show me today's photo and explain it") while
+  // several photos were shown: the question waits here, and picking one of them looks at it.
+  analysisQuestion String?   @map("analysis_question") @db.VarChar(500)
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
 
   user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)

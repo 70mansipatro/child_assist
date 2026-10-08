@@ -87,11 +87,13 @@ class _PhotoSearchCardState extends State<PhotoSearchCard> {
         final found = state!;
         final selected = _choosingAgain ? null : found.photos.where((p) => p.id == found.selectedId).firstOrNull;
         if (selected != null) {
+          final analysisId = found.analyses[selected.id];
           return PhotoDetailsCard(
             key: ValueKey('photo-${selected.id}'),
             photo: selected,
             results: widget.results,
-            note: found.contentHint && found.photos.length == 1
+            analysisRequestId: analysisId,
+            note: found.contentHint && found.photos.length == 1 && analysisId == null
                 ? "I can't search inside photos, so check this is the one. Tap Analyze and I'll look at it."
                 : null,
             onChooseAnother: found.photos.length > 1 ? () => setState(() => _choosingAgain = true) : null,
@@ -104,6 +106,8 @@ class _PhotoSearchCardState extends State<PhotoSearchCard> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text('I found $count matching photos. Which one would you like?', style: theme.textTheme.titleSmall),
+              if (widget.query.analyze)
+                Text("Tap the one you mean and I'll look at it.", style: theme.textTheme.bodySmall),
               if (count > found.photos.length)
                 Text('Showing the ${found.photos.length} best matches.', style: theme.textTheme.bodySmall),
               if (found.contentHint)
@@ -159,14 +163,24 @@ class _PhotoSearchCardState extends State<PhotoSearchCard> {
 }
 
 /// One photo from this phone: the photo itself, its date and time, the saved place it matched (and
-/// how), with Open Photo, Analyze, Share and WhatsApp. Share and WhatsApp ask first.
+/// how), with Open Photo, Analyze, Share and WhatsApp. Share and WhatsApp ask first. When the user
+/// already asked about the photo, it is being looked at ([analysisRequestId]) and that progress
+/// shows instead of the Analyze button.
 class PhotoDetailsCard extends StatefulWidget {
-  const PhotoDetailsCard({super.key, required this.photo, required this.results, this.onChooseAnother, this.note});
+  const PhotoDetailsCard({
+    super.key,
+    required this.photo,
+    required this.results,
+    this.onChooseAnother,
+    this.note,
+    this.analysisRequestId,
+  });
 
   final ChatPhoto photo;
   final ChatResultContext results;
   final VoidCallback? onChooseAnother;
   final String? note;
+  final String? analysisRequestId;
 
   @override
   State<PhotoDetailsCard> createState() => _PhotoDetailsCardState();
@@ -200,6 +214,7 @@ class _PhotoDetailsCardState extends State<PhotoDetailsCard> {
       results: widget.results,
       footer: [
         if (widget.note != null) Text(widget.note!, style: Theme.of(context).textTheme.bodySmall),
+        if (widget.analysisRequestId != null) PhotoAnalysisStatus(requestId: widget.analysisRequestId!, session: session),
         if (_status != null) Text(_status!, style: Theme.of(context).textTheme.bodyMedium),
         Wrap(
           spacing: 8,
@@ -210,7 +225,7 @@ class _PhotoDetailsCardState extends State<PhotoDetailsCard> {
               icon: const Icon(Icons.open_in_new_rounded, size: 18),
               label: const Text('Open Photo'),
             ),
-            if (widget.photo.id != null)
+            if (widget.photo.id != null && widget.analysisRequestId == null)
               ListenableBuilder(
                 listenable: session,
                 builder: (context, _) => FilledButton.icon(
@@ -234,6 +249,40 @@ class _PhotoDetailsCardState extends State<PhotoDetailsCard> {
           ],
         ),
       ],
+    );
+  }
+}
+
+/// Where looking at a photo for the user's question is: "Analyzing image...", answered (the answer
+/// is the next message), or why it could not be looked at. Never a guess.
+class PhotoAnalysisStatus extends StatelessWidget {
+  const PhotoAnalysisStatus({super.key, required this.requestId, required this.session});
+
+  final String requestId;
+  final ChatSession session;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: session,
+      builder: (context, _) {
+        final state = session.photoAnalysis(requestId);
+        final (String text, bool busy, bool failed) = switch (state?.phase) {
+          null || PhotoAnalysisPhase.analyzing => ('Analyzing image...', true, false),
+          PhotoAnalysisPhase.answered => ('Answered from this photo.', false, false),
+          PhotoAnalysisPhase.failed => (state!.message ?? "I couldn't look at the photo.", false, true),
+        };
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              text,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: failed ? AppColors.danger : null),
+            ),
+            if (busy) ...[const SizedBox(height: 6), const LinearProgressIndicator()],
+          ],
+        );
+      },
     );
   }
 }
@@ -399,7 +448,6 @@ class _PhotoAnalysisCardState extends State<PhotoAnalysisCard> {
       listenable: session,
       builder: (context, _) {
         final state = session.photoAnalysis(widget.requestId);
-        final theme = Theme.of(context);
         final photo = state?.photo;
         final thumb = photo == null
             ? null
@@ -412,29 +460,13 @@ class _PhotoAnalysisCardState extends State<PhotoAnalysisCard> {
                   onTap: () => widget.results.onOpenPhoto(photo.item),
                 ),
               );
-        final (String text, bool busy, bool failed) = switch (state?.phase) {
-          null || PhotoAnalysisPhase.analyzing => ('Analyzing image...', true, false),
-          PhotoAnalysisPhase.answered => ('Answered from this photo.', false, false),
-          PhotoAnalysisPhase.failed => (state!.message ?? "I couldn't look at the photo.", false, true),
-        };
         return AppCard(
           padding: const EdgeInsets.all(12),
           child: Row(
             children: [
               ?thumb,
               if (thumb != null) const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      text,
-                      style: theme.textTheme.bodyMedium?.copyWith(color: failed ? AppColors.danger : null),
-                    ),
-                    if (busy) ...[const SizedBox(height: 6), const LinearProgressIndicator()],
-                  ],
-                ),
-              ),
+              Expanded(child: PhotoAnalysisStatus(requestId: widget.requestId, session: session)),
             ],
           ),
         );

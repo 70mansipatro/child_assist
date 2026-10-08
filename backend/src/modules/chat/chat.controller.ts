@@ -10,8 +10,7 @@ import {
 } from "./actions/pending-actions";
 import { handleChatTurn } from "./chat.orchestrator";
 import { answerDocumentRead, failDocumentRead } from "./documents/document-reads";
-import { selectPhoto } from "./photos/photo-references";
-import { answerPhotoAnalysis, failPhotoRequest, recordPhotoSearch } from "./photos/photo-requests";
+import { answerPhotoAnalysis, choosePhotoInChat, failPhotoRequest, recordPhotoSearch } from "./photos/photo-requests";
 import * as chatService from "./chat.service";
 import {
   actionDocumentSchema,
@@ -139,8 +138,8 @@ export async function reportPhotoSearch(req: Request, res: Response): Promise<vo
 export async function choosePhoto(req: Request, res: Response): Promise<void> {
   const { photoId } = photoParamsSchema.parse(req.params);
   const { conversationId } = actionScopeSchema.parse(req.body ?? {});
-  const photo = await selectPhoto(getAuth(req).userId, photoId, { conversationId });
-  res.status(200).json({ photo });
+  const result = await choosePhotoInChat(getAuth(req).userId, photoId, { conversationId });
+  res.status(200).json(result);
 }
 
 export async function answerPhotoAnalysisRequest(req: Request, res: Response): Promise<void> {

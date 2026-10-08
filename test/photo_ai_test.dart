@@ -204,7 +204,14 @@ void main() {
     var next = 1;
 
     /// The server's reply to a photo request: a search for the phone to run.
-    void respondWithSearch({bool locationContext = false, List<PhotoVisit> visits = const [], bool latest = false, String? visualHint}) {
+    void respondWithSearch({
+      bool locationContext = false,
+      List<PhotoVisit> visits = const [],
+      bool latest = false,
+      String? visualHint,
+      String? fileName,
+      bool analyze = false,
+    }) {
       final (start, end) = _today();
       backend.chatResponder = (_) => FakeChatReply(
             'Let me find that photo.',
@@ -215,11 +222,13 @@ void main() {
                 'data': {
                   'requestId': 'search${next++}',
                   'query': {
-                    'startDate': latest ? null : start.toIso8601String(),
-                    'endDate': latest ? null : end.toIso8601String(),
+                    'startDate': latest || fileName != null ? null : start.toIso8601String(),
+                    'endDate': latest || fileName != null ? null : end.toIso8601String(),
+                    'fileName': fileName,
                     'locationContext': locationContext,
                     'latest': latest,
                     'visualHint': visualHint,
+                    'analyze': analyze,
                   },
                   'visits': [
                     for (final v in visits)
@@ -379,6 +388,102 @@ void main() {
       expect(find.text('Answered from this photo.'), findsOneWidget);
     });
 
+    // -- Automatic analysis: an explicit question about the photo needs no Analyze tap ----------
+
+    testWidgets('"Show me today\'s photo" only shows it: Analyze stays available, nothing is sent', (tester) async {
+      await startApp(tester, [_photo('661', const Duration(minutes: 3))]);
+      respondWithSearch();
+      await send(tester, "Show me today's photo");
+      expect(find.text('Open Photo'), findsOneWidget);
+      expect(find.text('Analyze'), findsOneWidget);
+      expect(find.text('Analyzing image...'), findsNothing);
+      expect(backend.analysedImages, isEmpty);
+      expect(gallery.imageReads.where((r) => r.contains('1536')), isEmpty);
+    });
+
+    testWidgets('"Show me today\'s photo and explain it": shown and analysed with no tap', (tester) async {
+      await startApp(tester, [_photo('671', const Duration(minutes: 3)), _photo('672', const Duration(days: 6))]);
+      respondWithSearch(analyze: true);
+      await send(tester, "Show me today's photo and explain it");
+
+      final photoId = onlyPhotoId();
+      expect(find.text('Open Photo'), findsOneWidget, reason: 'the photo is shown');
+      expect(find.text('Analyze'), findsNothing, reason: 'no button for a question already asked');
+      expect(find.text('Answered from this photo.'), findsOneWidget);
+      expect(backend.photoCalls, contains(startsWith('auto-analysis')));
+      expect(backend.analysedImages, hasLength(1), reason: 'the actual photo was sent');
+      expect(gallery.imageReads, contains('671 1536x1152'));
+      expect(gallery.imageReads.where((r) => r.startsWith('672 1536')), isEmpty, reason: 'only that photo');
+      expect(find.text('This photo shows an image of ${backend.analysedImages.single.length} bytes.'), findsOneWidget);
+      expect(backend.chatRequests, hasLength(1), reason: 'the user never had to ask again');
+      expect(backend.photoAnalysisStore.values.single['question'], "Show me today's photo and explain it");
+      expect(backend.photoBodies.last['photoId'], photoId);
+      expectNoLeaks(['671', '672']);
+
+      // Follow-up: the same photo is looked at again for the new question, still with no tap.
+      respondWithAnalysis(photoId);
+      await send(tester, 'What color is the dress?');
+      expect(backend.analysedImages, hasLength(2));
+      expect(backend.photoBodies.where((b) => b.containsKey('image')).map((b) => b['photoId']).toSet(), {photoId});
+      expect(find.text('Analyze'), findsNothing);
+    });
+
+    testWidgets('several matches for "explain it": the user picks one and only that one is analysed', (tester) async {
+      await startApp(tester, [for (var i = 1; i <= 3; i++) _photo('68$i', Duration(minutes: i * 6))]);
+      respondWithSearch(analyze: true);
+      await send(tester, 'Explain the photo I took today');
+
+      expect(find.text('I found 3 matching photos. Which one would you like?'), findsOneWidget);
+      expect(find.text("Tap the one you mean and I'll look at it."), findsOneWidget);
+      expect(backend.analysedImages, isEmpty, reason: 'never guesses which one');
+
+      final ids = backend.photoStore.keys.toList();
+      final pick = find.byKey(ValueKey('choose-photo-${ids[1]}'));
+      await tapIt(tester, find.descendant(of: pick, matching: find.byType(InkWell)).first);
+
+      expect(backend.photoCalls, containsAllInOrder(['select ${ids[1]}', startsWith('auto-analysis')]));
+      expect(find.text('Answered from this photo.'), findsOneWidget);
+      expect(find.text('Analyze'), findsNothing);
+      expect(backend.analysedImages, hasLength(1));
+      expect(gallery.imageReads.where((r) => r.contains('1536')), ['682 1536x1152'], reason: 'the picked photo only');
+      expect(backend.photoBodies.last['photoId'], ids[1]);
+      expect(backend.chatRequests, hasLength(1));
+    });
+
+    testWidgets('no photo found for "explain it": said plainly, nothing analysed or invented', (tester) async {
+      await startApp(tester, [_photo('691', const Duration(days: 8))]);
+      respondWithSearch(analyze: true);
+      await send(tester, "Explain today's photo");
+      expect(find.text("I couldn't find a matching photo in your available photos."), findsOneWidget);
+      expect(backend.analysedImages, isEmpty);
+      expect(backend.photoCalls.where((c) => c.startsWith('auto-analysis')), isEmpty);
+      expect(find.textContaining('This photo shows'), findsNothing);
+      expect(find.text('Analyzing image...'), findsNothing);
+    });
+
+    testWidgets('explicit questions about the photo are analysed automatically, never via a button', (tester) async {
+      await startApp(tester, [_photo('695', const Duration(minutes: 2))]);
+      respondWithSearch();
+      await send(tester, "Show me today's photo");
+      final photoId = onlyPhotoId();
+      const questions = [
+        'Explain this image',
+        'What is in this photo?',
+        'What color is the dress?',
+        'Describe this picture',
+        'Read the text in this image',
+      ];
+      for (final (i, question) in questions.indexed) {
+        respondWithAnalysis(photoId);
+        await send(tester, question);
+        expect(backend.chatRequests.last['message'], question);
+        expect(backend.analysedImages, hasLength(i + 1), reason: '"$question" used the actual image');
+        expect(find.text('Answered from this photo.'), findsWidgets);
+      }
+      expect(backend.chatRequests.where((r) => r['message'] == 'What is in this photo?'), hasLength(1),
+          reason: 'only the question the user asked; Analyze was never tapped');
+    });
+
     testWidgets('a deleted photo is reported as unavailable; nothing is sent or guessed', (tester) async {
       await startApp(tester, [_photo('701', const Duration(minutes: 5))]);
       respondWithSearch();
@@ -409,6 +514,165 @@ void main() {
       await send(tester, 'Describe this image');
       expect(find.textContaining("couldn't look at the photo"), findsOneWidget);
       expect(find.textContaining('This photo shows'), findsNothing);
+    });
+
+    // -- "My latest / recent photo": always the newest readable photo, from a fresh search -------
+
+    /// When the photo the phone reported for its last search was taken.
+    String lastReported() => ((backend.photoBodies.where((b) => b.containsKey('photos')).last['photos'] as List).single
+        as Map)['capturedAt'] as String;
+    String takenAt(PhotoItem p) => p.createdAt.toUtc().toIso8601String();
+
+    testWidgets('A: "Show my recent photo" shows the newest photo by when it was taken', (tester) async {
+      final older = _photo('a1', Duration(days: 2 + _random.nextInt(5)));
+      final newer = _photo('a2', Duration(minutes: 5 + _random.nextInt(50)));
+      // The older one is listed first, as when an old photo is forwarded or restored after a new one.
+      await startApp(tester, [older, newer]);
+      respondWithSearch(latest: true);
+      await send(tester, 'Show my recent photo');
+
+      expect(lastReported(), takenAt(newer));
+      expect(find.text('Open Photo'), findsOneWidget);
+      expect(find.text('Analyze'), findsOneWidget, reason: 'only shown, not analysed');
+      expect(backend.analysedImages, isEmpty);
+      expectNoLeaks(['a1', 'a2']);
+    });
+
+    testWidgets('B: an old photo already in the chat is not reused; a fresh search finds the newer one', (tester) async {
+      final name = '${_word()}_${_random.nextInt(9000) + 1000}.jpg';
+      final old = _photo('b1', Duration(days: 3 + _random.nextInt(5)), name: name);
+      final newer = _photo('b2', Duration(minutes: 1 + _random.nextInt(30)));
+      await startApp(tester, [old, newer]);
+      respondWithSearch(fileName: name.split('.').first);
+      await send(tester, 'Show me $name');
+      expect(lastReported(), takenAt(old));
+      final oldId = onlyPhotoId();
+      final resets = gallery.resets;
+      final queries = gallery.queries.length;
+
+      respondWithSearch(latest: true);
+      await send(tester, 'Show my latest photo');
+      expect(gallery.resets, greaterThan(resets), reason: 'nothing listed earlier is trusted');
+      expect(gallery.queries.length, greaterThan(queries), reason: 'the gallery was searched again');
+      expect(lastReported(), takenAt(newer));
+      expect(backend.photoStore.keys.last, isNot(oldId));
+      expect(backend.photoStore, hasLength(2));
+    });
+
+    testWidgets('C: "Explain my latest <place> photo" analyses the newest photo taken at that place', (tester) async {
+      final place = '${_cap(_word())} ${_cap(_word())}';
+      final lat = _lat(), lng = _lng();
+      final firstVisit = PhotoVisit(capturedAt: DateTime.now().subtract(const Duration(days: 2)), latitude: lat, longitude: lng, placeName: place);
+      final lastVisit = PhotoVisit(capturedAt: DateTime.now().subtract(const Duration(days: 1)), latitude: lat, longitude: lng, placeName: place);
+      final earlierThere = _photo('c1', const Duration(days: 2, minutes: 10));
+      final latestThere = _photo('c2', const Duration(days: 1, minutes: 5));
+      final elsewhere = _photo('c3', Duration(minutes: 2 + _random.nextInt(30))); // newest, but not there
+      await startApp(tester, [elsewhere, earlierThere, latestThere]);
+      gallery.positions['c1'] = PhotoPosition(lat + 0.0006, lng);
+      gallery.positions['c2'] = PhotoPosition(lat, lng - 0.0007);
+      gallery.positions['c3'] = PhotoPosition(lat + 1, lng + 1);
+
+      final question = 'Explain my latest $place photo';
+      respondWithSearch(locationContext: true, latest: true, visits: [firstVisit, lastVisit], analyze: true);
+      await send(tester, question);
+
+      expect(lastReported(), takenAt(latestThere));
+      expect(backend.analysedImages, hasLength(1));
+      expect(gallery.imageReads.where((r) => r.contains('1536')), ['c2 1536x1152'], reason: 'only the newest photo there');
+      expect(backend.photoAnalysisStore.values.single['question'], question);
+      expect(find.text('Analyze'), findsNothing);
+      expectNoLeaks(['c1', 'c2', 'c3']);
+    });
+
+    testWidgets('a place with no matching photo: said plainly, never an unrelated photo', (tester) async {
+      final place = PhotoVisit(
+        capturedAt: DateTime.now().subtract(const Duration(days: 1)),
+        latitude: _lat(),
+        longitude: _lng(),
+        placeName: _cap(_word()),
+      );
+      final unrelated = _photo('n1', Duration(minutes: 1 + _random.nextInt(30)));
+      await startApp(tester, [unrelated]);
+      gallery.positions['n1'] = PhotoPosition(place.latitude + 2, place.longitude);
+      respondWithSearch(locationContext: true, latest: true, visits: [place], analyze: true);
+      await send(tester, 'Explain the latest picture from ${place.placeName}');
+
+      expect(find.text("I couldn't find a matching photo in your available photos."), findsOneWidget);
+      expect(backend.photoBodies.single['outcome'], 'none');
+      expect(backend.analysedImages, isEmpty);
+    });
+
+    testWidgets('D: a photo taken after the previous request is the one shown next time', (tester) async {
+      final first = _photo('d1', Duration(hours: 2 + _random.nextInt(20)));
+      await startApp(tester, [first]);
+      respondWithSearch(latest: true);
+      await send(tester, 'Show my recent photo');
+      expect(lastReported(), takenAt(first));
+
+      final added = _photo('d2', Duration(seconds: 10 + _random.nextInt(50)));
+      gallery.photos.add(added);
+      respondWithSearch(latest: true);
+      await send(tester, 'Show my recent photo');
+      expect(lastReported(), takenAt(added));
+      expect(backend.photoStore, hasLength(2), reason: 'a new id for the new photo');
+    });
+
+    testWidgets('E: the newest photo was deleted: the next newest readable one is chosen', (tester) async {
+      final deleted = _photo('e1', Duration(minutes: 1 + _random.nextInt(10)));
+      final unreadable = _photo('e2', Duration(minutes: 20 + _random.nextInt(10)));
+      final readable = _photo('e3', Duration(hours: 1 + _random.nextInt(5)));
+      final oldest = _photo('e4', const Duration(days: 9));
+      await startApp(tester, [deleted, unreadable, readable, oldest]);
+      gallery.deleted.addAll(['e1', 'e2']);
+
+      respondWithSearch(latest: true, analyze: true);
+      await send(tester, 'Explain my most recent photo');
+      expect(lastReported(), takenAt(readable));
+      expect(gallery.imageReads.where((r) => r.contains('1536')), ['e3 1536x1152']);
+      expect(find.text('Answered from this photo.'), findsOneWidget);
+    });
+
+    testWidgets('E: when no photo can be read, nothing is shown or invented', (tester) async {
+      await startApp(tester, [_photo('f1', const Duration(minutes: 3)), _photo('f2', const Duration(hours: 4))]);
+      gallery.deleted.addAll(['f1', 'f2']);
+      respondWithSearch(latest: true);
+      await send(tester, 'Show my latest photo');
+      expect(find.text("I couldn't find a matching photo in your available photos."), findsOneWidget);
+      expect(backend.photoBodies.single['outcome'], 'none');
+    });
+
+    testWidgets('F: "Explain this photo" after picking one analyses the picked photo, not a new search', (tester) async {
+      await startApp(tester, [for (var i = 1; i <= 3; i++) _photo('g$i', Duration(minutes: i * 9))]);
+      respondWithSearch();
+      await send(tester, "Show me today's photos");
+      final ids = backend.photoStore.keys.toList();
+      final pick = find.byKey(ValueKey('choose-photo-${ids[2]}'));
+      await tapIt(tester, find.descendant(of: pick, matching: find.byType(InkWell)).first);
+      final searches = backend.photoCalls.where((c) => c.startsWith('results')).length;
+      final queries = gallery.queries.length;
+
+      respondWithAnalysis(ids[2]);
+      await send(tester, 'Explain this photo');
+      expect(backend.photoCalls.where((c) => c.startsWith('results')).length, searches, reason: 'no new search');
+      expect(gallery.queries, hasLength(queries));
+      expect(backend.photoBodies.last['photoId'], ids[2]);
+      expect(gallery.imageReads.where((r) => r.contains('1536')), ['g3 1536x1152'], reason: 'the picked photo');
+    });
+
+    testWidgets('G: "Explain my recent photo" finds the newest photo and analyses it with no Analyze tap', (tester) async {
+      final older = _photo('h1', Duration(days: 1 + _random.nextInt(5)));
+      final newer = _photo('h2', Duration(minutes: 1 + _random.nextInt(30)));
+      await startApp(tester, [older, newer]);
+      respondWithSearch(latest: true, analyze: true);
+      await send(tester, 'Explain my recent photo');
+
+      expect(lastReported(), takenAt(newer));
+      expect(find.text('Analyze'), findsNothing);
+      expect(find.text('Answered from this photo.'), findsOneWidget);
+      expect(backend.chatRequests, hasLength(1), reason: 'the user never had to ask again');
+      expect(gallery.imageReads.where((r) => r.contains('1536')), ['h2 1536x1152']);
+      expect(backend.photoAnalysisStore.values.single['question'], 'Explain my recent photo');
+      expectNoLeaks(['h1', 'h2']);
     });
 
     testWidgets('"Send this photo on WhatsApp": asks first, then only opens WhatsApp', (tester) async {

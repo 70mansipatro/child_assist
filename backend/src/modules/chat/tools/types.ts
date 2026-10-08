@@ -13,6 +13,7 @@ export type ToolErrorCode =
   | "TEXT_EXTRACTION_UNAVAILABLE"
   | "PHOTO_NOT_FOUND"
   | "NO_PHOTO_SELECTED"
+  | "PHOTO_SEARCH_REQUIRED"
   | "WEB_SEARCH_NOT_CONFIGURED"
   | "ACTION_NOT_CONFIGURED"
   | "INVALID_RECIPIENT"
@@ -103,6 +104,15 @@ export interface ToolContext {
     toolsUsed: string[];
     pendingActions: PendingActionView[];
     events: ToolEvent[];
+    /** The photo search opened this turn, and what the user asked about the photo, if anything. */
+    photoSearch?: { requestId: string; question: string | null };
+    /** A question about "this photo" asked in the same turn as a search: it is about the photo being found. */
+    photoQuestion?: string;
+    /**
+     * The user asked for their latest / most recent photo: only a fresh search of the gallery
+     * answers that, never a photo already shown in this chat.
+     */
+    recentPhoto?: boolean;
   };
 }
 

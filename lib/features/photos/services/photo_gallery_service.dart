@@ -24,6 +24,10 @@ abstract class PhotoLibrary {
   /// May throw.
   Future<List<PhotoItem>> page(int page, int pageSize, {DateTimeRange? range});
 
+  /// The [count] photos most recently TAKEN, newest first by [PhotoItem.createdAt] (the photo's own
+  /// capture time), not by when the file was added to the gallery. Read fresh each time. May throw.
+  Future<List<PhotoItem>> newest(int count);
+
   /// A JPEG of the photo scaled to fit [width] x [height], or null if unavailable. May throw.
   Future<Uint8List?> image(String id, int width, int height);
 
@@ -81,6 +85,29 @@ class DevicePhotoLibrary implements PhotoLibrary {
       _assets[asset.id] = asset;
     }
     return assets.map(_toItem).toList();
+  }
+
+  @override
+  Future<List<PhotoItem>> newest(int count) async {
+    final byAdded = await page(0, count);
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return byAdded;
+    // MediaStore lists photos by when the file was ADDED, so a photo forwarded or restored today
+    // comes before one taken today. The capture time is DATE_TAKEN (what createDateTime reports),
+    // so the newest by that are asked for too; a photo without DATE_TAKEN falls back to when it was
+    // added, and is among the first list.
+    final byTaken = await PhotoManager.getAssetListPaged(
+      page: 0,
+      pageCount: count,
+      type: RequestType.image,
+      filterOption: AdvancedCustomFilter(orderBy: [OrderByItem.desc(CustomColumns.android.dateTaken)])
+        ..needTitle = true,
+    );
+    final items = {for (final p in byAdded) p.id: p};
+    for (final asset in byTaken) {
+      _assets[asset.id] = asset;
+      items[asset.id] = _toItem(asset);
+    }
+    return (items.values.toList()..sort((a, b) => b.createdAt.compareTo(a.createdAt))).take(count).toList();
   }
 
   @override
@@ -208,6 +235,17 @@ class PhotoGalleryService {
     }
   }
 
+  /// The [pageSize] photos most recently taken, newest first by their own capture time.
+  /// Throws [PhotoGalleryException].
+  Future<List<PhotoItem>> loadNewest() async {
+    try {
+      return await _library.newest(pageSize);
+    } catch (e) {
+      debugPrint('Loading photos failed: ${e.runtimeType}');
+      throw const PhotoGalleryException();
+    }
+  }
+
   /// Drops cached entries so the next load reflects the gallery as it is now.
   void reset() {
     _thumbnails.clear();
@@ -246,6 +284,10 @@ class PhotoGalleryService {
       return false;
     }
   }
+
+  /// Whether the photo is still on the device AND its image can be read: the OS may still list a
+  /// photo whose file was deleted or cannot be opened.
+  Future<bool> isReadable(PhotoItem photo) async => await exists(photo) && await thumbnail(photo) != null;
 
   /// The GPS position stored in the photo, or null when it has none. Never logged.
   Future<PhotoPosition?> location(PhotoItem photo) async {

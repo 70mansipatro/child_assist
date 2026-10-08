@@ -511,6 +511,8 @@ describe("chat API: tools and permissions", () => {
       endDate: "2026-10-06T00:00:00.000Z",
       locationContext: false,
       latest: false,
+      // Only finding photos was asked: nothing is looked at, the card offers Analyze.
+      analyze: false,
     });
     assert.deepEqual(event.data.visits, []);
     assert.doesNotMatch(res.raw, /content:\/\/|\/storage\/|DCIM/, "no paths or URIs");
