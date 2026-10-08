@@ -13,6 +13,7 @@ import '../../permissions/screens/permissions_screen.dart';
 import '../../permissions/services/permission_sync_service.dart';
 import '../../photos/screens/photo_viewer_screen.dart';
 import '../../photos/services/photo_gallery_service.dart';
+import '../../voice_assistant/services/wake_word_service.dart';
 import '../services/chat_service.dart';
 import '../models/chat_message.dart';
 import '../services/chat_session.dart';
@@ -41,6 +42,7 @@ class ChatScreen extends StatefulWidget {
     required this.textToSpeech,
     this.messageHandoff = const NativeMessageHandoff(),
     this.voiceInput = const UnavailableVoiceInput(),
+    this.wakeWordService,
     this.active = true,
   });
 
@@ -57,6 +59,9 @@ class ChatScreen extends StatefulWidget {
   final MessageHandoff messageHandoff;
   final VoiceInput voiceInput;
   final TextToSpeechService textToSpeech;
+
+  /// "Hey Child": a wake phrase opens Chat and listens for the question here.
+  final WakeWordService? wakeWordService;
 
   /// False while another bottom-navigation tab is showing. Leaving the tab stops the
   /// microphone and any speech, just like leaving the app.
@@ -126,15 +131,19 @@ class _ChatScreenState extends State<ChatScreen> {
     permissionSyncService: widget.permissionSyncService,
     send: _sendAndGetReply,
     explainPermission: _explainMicrophone,
+    wakeWord: widget.wakeWordService,
   );
 
-  // Leaving the app stops the microphone and any speech: voice is foreground-only.
-  late final AppLifecycleListener _lifecycle = AppLifecycleListener(onHide: _voice.interrupt);
+  // Leaving the app stops the microphone and any speech: voice is foreground-only. (The opt-in
+  // wake word listens for its phrase in its own service, not here.)
+  late final AppLifecycleListener _lifecycle = AppLifecycleListener(onHide: _onHide, onResume: _takeWakeWord);
 
   @override
   void initState() {
     super.initState();
     _lifecycle;
+    widget.wakeWordService?.addListener(_onWakeWordChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _takeWakeWord());
   }
 
   @override
@@ -143,11 +152,37 @@ class _ChatScreenState extends State<ChatScreen> {
     if (oldWidget.active && !widget.active) {
       _focus.unfocus();
       _voice.interrupt();
+    } else if (!oldWidget.active && widget.active) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _takeWakeWord());
     }
+  }
+
+  void _onHide() {
+    _voice.interrupt();
+    widget.wakeWordService?.appHidden();
+  }
+
+  bool _wasLocked = false;
+
+  void _onWakeWordChanged() {
+    if (_lockedSession != _wasLocked && mounted) setState(() => _wasLocked = _lockedSession);
+    _takeWakeWord();
+  }
+
+  /// "Hey Child" was heard: once Chat is on screen, listen for the question.
+  void _takeWakeWord() {
+    final wake = widget.wakeWordService;
+    if (wake == null || !mounted || !widget.active || !wake.hasPendingActivation) return;
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    if (lifecycle != null && lifecycle != AppLifecycleState.resumed) return;
+    if (!wake.takeActivation()) return;
+    _focus.unfocus();
+    _voice.listenAfterWakeWord();
   }
 
   @override
   void dispose() {
+    widget.wakeWordService?.removeListener(_onWakeWordChanged);
     _lifecycle.dispose();
     _voice.dispose();
     _session.dispose();
@@ -272,9 +307,12 @@ class _ChatScreenState extends State<ChatScreen> {
                 icon: Icon(_voice.repliesEnabled ? Icons.volume_up_rounded : Icons.volume_off_rounded),
               ),
             ),
-          IconButton(tooltip: 'New Chat', onPressed: _newChat, icon: const Icon(Icons.add_comment_rounded)),
-          IconButton(tooltip: 'History', onPressed: _openHistory, icon: const Icon(Icons.history_rounded)),
-          const AppMenuButton(current: AppDestination.chat),
+          // Above the lock screen only the current question is available: no History or menu.
+          if (!_lockedSession) ...[
+            IconButton(tooltip: 'New Chat', onPressed: _newChat, icon: const Icon(Icons.add_comment_rounded)),
+            IconButton(tooltip: 'History', onPressed: _openHistory, icon: const Icon(Icons.history_rounded)),
+            const AppMenuButton(current: AppDestination.chat),
+          ],
           const SizedBox(width: 4),
         ],
       ),
@@ -282,6 +320,7 @@ class _ChatScreenState extends State<ChatScreen> {
         listenable: Listenable.merge([_session, _voice]),
         builder: (context, _) => Column(
           children: [
+            if (_lockedSession) _buildLockedBanner(),
             Expanded(child: _buildBody(context)),
             if (_session.error != null) _buildError(),
             ?_buildVoiceStatus(context),
@@ -295,6 +334,22 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  bool get _lockedSession => widget.wakeWordService?.lockedSession ?? false;
+
+  /// Shown while Child Assist answers above the lock screen.
+  Widget _buildLockedBanner() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      child: InfoBanner(
+        icon: Icons.lock_rounded,
+        message: const Text('Your phone is locked. Unlock it to use the rest of Child Assist.'),
+        actions: [
+          FilledButton(onPressed: () => widget.wakeWordService?.unlock(), child: const Text('Unlock')),
+        ],
       ),
     );
   }

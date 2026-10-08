@@ -52,6 +52,9 @@ class _MyAppState extends State<MyApp> {
   void _onResume() {
     final services = widget.services;
     services.automaticTrackingService.recheck();
+    // "Hey Child" stops if the microphone permission was removed, and starts again if Android
+    // stopped it while the app was in the background (it can only restart from the foreground).
+    services.wakeWordService.recheck();
     // A permission changed in Settings is reported to the account (the server tells the user if
     // one Child Assist relies on was turned off), and push registration follows the notification
     // permission. Status checks only; no dialogs.

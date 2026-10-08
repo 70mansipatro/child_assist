@@ -30,6 +30,9 @@ import 'features/photos/services/photo_gallery_service.dart';
 import 'features/profile/data/profile_api.dart';
 import 'features/profile/services/profile_photo_service.dart';
 import 'features/profile/services/profile_service.dart';
+import 'features/voice_assistant/data/wake_word_platform.dart';
+import 'features/voice_assistant/data/wake_word_store.dart';
+import 'features/voice_assistant/services/wake_word_service.dart';
 
 /// The app's long-lived services, created once at startup and passed down to screens.
 class AppServices {
@@ -51,12 +54,13 @@ class AppServices {
     required this.voiceInput,
     required this.textToSpeech,
     required this.notificationService,
+    required this.wakeWordService,
   });
 
   /// Wires the real implementations. Tests can swap the HTTP client, storage, Google sign-in, the
   /// OS permission layer, the location hardware (foreground and background), the geocoder, the
   /// photo library, the device documents, the phone's contacts, WhatsApp/sharing, speech
-  /// recognition, text-to-speech or push delivery.
+  /// recognition, text-to-speech, push delivery or the wake word.
   factory AppServices.create({
     ApiClient? apiClient,
     TokenStorage? tokenStorage,
@@ -74,6 +78,8 @@ class AppServices {
     TextToSpeechService? textToSpeech,
     ProfilePhotoPlatform? profilePhotoPlatform,
     PushPlatform? pushPlatform,
+    WakeWordPlatform? wakeWordPlatform,
+    WakeWordStore? wakeWordStore,
   }) {
     final client = apiClient ?? ApiClient();
     final authService = AuthService(
@@ -87,6 +93,7 @@ class AppServices {
     // One device geocoder for both manual and automatic locations.
     final places = placeLookup ?? NativePlaceLookup();
     final locationApi = LocationApi(client);
+    final speech = textToSpeech ?? FlutterTextToSpeechService();
     return AppServices(
       authService: authService,
       profileService: profileService,
@@ -125,13 +132,21 @@ class AppServices {
       ),
       messageHandoff: messageHandoff ?? const NativeMessageHandoff(),
       voiceInput: voiceInput ?? SpeechToTextVoiceInput(),
-      textToSpeech: textToSpeech ?? FlutterTextToSpeechService(),
+      textToSpeech: speech,
       notificationService: NotificationService(
         authService: authService,
         api: NotificationsApi(client),
         permissionService: permissions,
         permissionSyncService: permissionSyncService,
         platform: pushPlatform,
+      ),
+      wakeWordService: WakeWordService(
+        authService: authService,
+        permissionService: permissions,
+        permissionSyncService: permissionSyncService,
+        textToSpeech: speech,
+        platform: wakeWordPlatform,
+        store: wakeWordStore,
       ),
     );
   }
@@ -168,6 +183,10 @@ class AppServices {
   /// Push notifications (FCM delivery only), the unread badge, history and preferences. Follows
   /// the signed-in account: logout unregisters this phone.
   final NotificationService notificationService;
+
+  /// "Hey Child" hands-free voice activation (opt-in, detected on the phone). Follows the signed-in
+  /// account: stops on logout.
+  final WakeWordService wakeWordService;
 
   /// Light, dark or follow the device. Chosen in App Settings; kept for this app session only.
   final ValueNotifier<ThemeMode> themeMode = ValueNotifier(ThemeMode.system);

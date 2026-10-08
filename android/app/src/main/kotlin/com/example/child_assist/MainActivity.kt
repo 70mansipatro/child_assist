@@ -7,10 +7,12 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.telephony.PhoneNumberUtils
 import android.telephony.TelephonyManager
+import com.example.child_assist.wakeword.WakeWordChannel
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -23,6 +25,30 @@ import java.util.concurrent.RejectedExecutionException
 class MainActivity : FlutterActivity() {
     private val io = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
+
+    /** "Hey Child": the on-device wake word service and the app opening for a question. */
+    private val wakeWord = WakeWordChannel(this)
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        wakeWord.onActivationIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        wakeWord.onActivationIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        wakeWord.onVisible(true)
+    }
+
+    override fun onPause() {
+        wakeWord.onVisible(false)
+        super.onPause()
+    }
 
     private fun appVersion(): String? = try {
         val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -42,6 +68,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        wakeWord.register(flutterEngine)
         // Lets Dart pick the right photo permission (READ_MEDIA_IMAGES vs. storage) per Android version.
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "child_assist/platform")
             .setMethodCallHandler { call, result ->
@@ -156,6 +183,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         io.shutdown()
+        wakeWord.onDestroy()
         super.onDestroy()
     }
 

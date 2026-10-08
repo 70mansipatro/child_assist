@@ -124,3 +124,44 @@ npm run notify:send -- --email you@example.com [--template test|app-update|revie
 **iOS:** Push Notifications entitlement (`aps-environment`), `remote-notification` background mode
 and the plist are configured. An APNs key must still be uploaded in the Firebase console, and
 **iOS has not been tested on a real device.**
+
+## Voice Assistant: "Hey Child" wake word
+
+Opt-in hands-free voice: Settings > Voice Assistant > Wake Word. Say **"Hey Child"** (or **"Hi Child"**),
+then ask the question. Tap-to-talk is unchanged and works alongside it.
+
+### How it works
+
+- **Detection is on the phone.** `WakeWordService.kt` (Android foreground service, type `microphone`)
+  feeds 16 kHz microphone audio to an offline keyword spotter: [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
+  1.13.8 (Apache-2.0) with the `sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01` model (Apache-2.0,
+  ~6 MB in `android/app/src/main/assets/wake_word/`). No API key, account or licence fee. The AAR is
+  downloaded by Gradle into `android/app/libs/` and verified against a pinned SHA-256.
+- **Privacy.** Before the wake phrase, audio stays in memory on the phone and is discarded; nothing is
+  recorded, stored or sent (no backend endpoint exists for it). After the phrase, the question is
+  captured by the same speech recogniser as tap-to-talk and sent as text through the normal
+  authenticated `POST /api/chat`. The wake phrase is stripped (`stripWakePhrase`) so the assistant only
+  receives the question.
+- **State machine** (`WakeWordStateMachine`): disabled, starting, listeningForWakeWord,
+  wakeWordDetected, listeningForCommand, processing, speaking, paused, error. A question with no answer
+  times out (15 s in Flutter, 90 s safety net in the service).
+- **No self-triggering.** The microphone closes while a reply is read aloud (plus 0.7 s), during
+  tap-to-talk, during calls, and while the question is captured. It reopens when no reason is left.
+- **Battery.** A cheap loudness gate runs on every 100 ms; the model runs only while there is sound.
+  No wake lock (Android's audio system keeps the CPU awake while recording). Tuning (threshold 0.20,
+  boost 1.0) is internal (`WakeWordTuning`), measured offline: 29/30 phrases detected, 0 false
+  activations on 78 similar-phrase clips (synthetic voices; real-world accuracy must be checked on a device).
+- **Lock screen.** The service opens Child Assist with a full-screen notification. By default the
+  user must unlock first; "Answer while locked" (off by default) shows only Chat above the lock screen
+  and the lock returns 15 s after the answer.
+- **Account.** Stops on logout/account switch and switches off for that account; settings are kept per
+  account on the phone (`WakeWordStore`), never in the database.
+
+### Limits (Android)
+
+Works while the app process and its service run: app open, in the background, screen off/locked.
+It does **not** work when the phone is off, after Force stop, and on some OEMs after swiping the app
+away (aggressive battery savers on Xiaomi, Oppo, Vivo, Samsung, Huawei may stop it; allow background
+activity). After a reboot it does not start by itself (Android 14 forbids starting a microphone
+service at boot): open Child Assist once. Android 14+ may require allowing "full-screen
+notifications" for opening over the lock screen. iOS is not supported.

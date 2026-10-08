@@ -3,7 +3,8 @@
     <uses-permission android:name="android.permission.INTERNET"/>
 
     <!-- Runtime permissions. Each is requested only when the user opens the related feature
-         (see lib/core/permissions/permission_service.dart). No background microphone. -->
+         (see lib/core/permissions/permission_service.dart). The microphone is used in the background
+         only by the opt-in "Hey Child" wake word, with a persistent notification. -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <!-- Automatic Location History only. Requested after the user switches it on and reads what is
@@ -15,7 +16,15 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <!-- Android 14+: the type-specific permission for a location foreground service. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
+    <!-- Tap-to-talk, and the "Hey Child" wake word only after the user switches it on in
+         Settings > Voice Assistant. The wake word is detected on the phone (WakeWordService); no
+         audio is recorded to storage or sent anywhere. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!-- Android 14+: the type-specific permission for the wake word's microphone foreground service. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
+    <!-- After "Hey Child", opens Child Assist over a locked or sleeping screen for the question
+         (a full-screen notification). Android 14+ may require the user to allow it in Settings. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
     <uses-permission android:name="android.permission.CAMERA"/>
     <!-- Photos: Android 13+ uses READ_MEDIA_IMAGES (plus partial "selected photos" access on 14+);
          Android 12 and below fall back to READ_EXTERNAL_STORAGE. -->
@@ -66,6 +75,13 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- "Hey Child" wake word. Runs only while the user has it switched on, always with a
+             persistent notification (with "Turn off"); stops on logout or when the microphone
+             permission is removed. Not exported: only this app can start it. -->
+        <service
+            android:name=".wakeword.WakeWordService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
         <!-- Push notifications (Firebase Cloud Messaging). Pushes that arrive while the app is in
              the background are shown by Android with this icon on this channel unless they name
              one; the app creates the channels (lib/core/notifications/notification_channels.dart). -->

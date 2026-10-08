@@ -15,6 +15,8 @@ import '../permissions/screens/permissions_screen.dart';
 import '../photos/screens/photos_screen.dart';
 import '../profile/screens/profile_screen.dart';
 import '../settings/screens/app_settings_screen.dart';
+import '../voice_assistant/screens/voice_assistant_screen.dart';
+import '../voice_assistant/services/wake_word_service.dart';
 import 'dashboard_screen.dart';
 
 /// The signed-in app: four tabs (Dashboard, Chat, Location, Profile) behind one bottom
@@ -47,11 +49,14 @@ class _AppShellState extends State<AppShell> {
   StreamSubscription<PushMessage>? _alerts;
 
   NotificationService get _notifications => widget.services.notificationService;
+  WakeWordService get _wakeWord => widget.services.wakeWordService;
 
   @override
   void initState() {
     super.initState();
     widget.services.appMenu.attach(_go);
+    _wakeWord.addListener(_onWakeWord);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _onWakeWord());
     _notifications.addListener(_openPendingNotification);
     _alerts = _notifications.inAppAlerts.listen(_showAlert);
     _reportVisible();
@@ -64,6 +69,7 @@ class _AppShellState extends State<AppShell> {
   @override
   void dispose() {
     widget.services.appMenu.detach(_go);
+    _wakeWord.removeListener(_onWakeWord);
     _notifications.removeListener(_openPendingNotification);
     _notifications.setVisibleDestination(null);
     _alerts?.cancel();
@@ -87,6 +93,16 @@ class _AppShellState extends State<AppShell> {
     );
   }
 
+  bool _lockedSession = false;
+
+  /// "Hey Child" was heard: Chat comes to the front and takes the question. Above the lock screen
+  /// only Chat is shown.
+  void _onWakeWord() {
+    if (!mounted) return;
+    if (_wakeWord.lockedSession != _lockedSession) setState(() => _lockedSession = _wakeWord.lockedSession);
+    if (_wakeWord.hasPendingActivation && (_index != AppShell.chatTab || _pushed > 0)) _go(AppDestination.chat);
+  }
+
   void _reportVisible() {
     final destination = _pushed > 0
         ? null
@@ -102,6 +118,13 @@ class _AppShellState extends State<AppShell> {
   /// Opens a page chosen from the ☰ menu: closes whatever is on top, then shows a tab or
   /// pushes the page.
   void _go(AppDestination destination) {
+    if (_lockedSession && destination != AppDestination.chat) {
+      // The rest of the app needs the phone unlocked.
+      _wakeWord.unlock().then((unlocked) {
+        if (unlocked && mounted) _go(destination);
+      });
+      return;
+    }
     Navigator.of(context).popUntil((route) => route.isFirst);
     switch (destination) {
       case AppDestination.dashboard:
@@ -188,6 +211,15 @@ class _AppShellState extends State<AppShell> {
       themeMode: widget.services.themeMode,
       onLogout: widget.services.authService.logout,
       onOpenNotificationSettings: _openNotificationSettings,
+      onOpenVoiceAssistant: _openVoiceAssistant,
+    ),
+  );
+
+  void _openVoiceAssistant() => _push(
+    VoiceAssistantScreen(
+      wakeWordService: _wakeWord,
+      textToSpeech: widget.services.textToSpeech,
+      permissionService: widget.services.permissionService,
     ),
   );
 
@@ -218,6 +250,7 @@ class _AppShellState extends State<AppShell> {
         messageHandoff: services.messageHandoff,
         voiceInput: services.voiceInput,
         textToSpeech: services.textToSpeech,
+        wakeWordService: services.wakeWordService,
       ),
       AppShell.locationTab => LocationScreen(
         locationService: services.locationService,
@@ -241,7 +274,8 @@ class _AppShellState extends State<AppShell> {
   Widget build(BuildContext context) {
     return PopScope(
       // Back from any other tab returns to Dashboard; back on Dashboard leaves the app.
-      canPop: _index == AppShell.dashboardTab,
+      // Above the lock screen, back leaves Child Assist and the lock screen returns.
+      canPop: _index == AppShell.dashboardTab || _lockedSession,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _select(AppShell.dashboardTab);
       },
@@ -256,7 +290,8 @@ class _AppShellState extends State<AppShell> {
               ),
           ],
         ),
-        bottomNavigationBar: ListenableBuilder(
+        // Above the lock screen (a "Hey Child" question) there is no way to the other tabs.
+        bottomNavigationBar: _lockedSession ? null : ListenableBuilder(
           listenable: _notifications,
           builder: (context, _) => _GradientNavigationBar(
             selectedIndex: _index,

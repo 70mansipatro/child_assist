@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 
 import '../../../core/permissions/permission_service.dart';
 import '../../permissions/services/permission_sync_service.dart';
+import '../../voice_assistant/services/wake_phrase.dart';
+import '../../voice_assistant/services/wake_word_service.dart';
 import '../models/chat_message.dart';
 import 'text_to_speech_service.dart';
 import 'voice_input.dart';
@@ -14,6 +16,9 @@ enum VoiceState { idle, requestingPermission, listening, processing, speaking, e
 /// Tap-to-talk for the chat screen: checks the microphone permission, listens for one
 /// utterance, sends the transcript through the normal chat send, and reads replies aloud when
 /// "Voice replies" is on. The screen only draws [state]; all voice logic lives here.
+///
+/// After "Hey Child" ([listenAfterWakeWord]) the same listening, send and read-aloud steps run
+/// without a tap; only the question is sent, never the wake phrase.
 class VoiceChatController extends ChangeNotifier {
   VoiceChatController({
     required VoiceInput voiceInput,
@@ -22,12 +27,15 @@ class VoiceChatController extends ChangeNotifier {
     required PermissionSyncService permissionSyncService,
     required Future<ChatMessage?> Function(String text) send,
     required Future<bool> Function() explainPermission,
+    WakeWordService? wakeWord,
+    this.wakeQuestionTimeout = const Duration(seconds: 15),
   })  : _voice = voiceInput,
         _tts = textToSpeech,
         _permissions = permissionService,
         _sync = permissionSyncService,
         _send = send,
-        _explainPermission = explainPermission {
+        _explainPermission = explainPermission,
+        _wakeWord = wakeWord {
     _tts.addListener(_ttsChanged);
   }
 
@@ -35,6 +43,12 @@ class VoiceChatController extends ChangeNotifier {
   final TextToSpeechService _tts;
   final PermissionService _permissions;
   final PermissionSyncService _sync;
+
+  /// "Hey Child", when available: its microphone is released while the user talks here.
+  final WakeWordService? _wakeWord;
+
+  /// The longest a question after the wake phrase may take before listening gives up.
+  final Duration wakeQuestionTimeout;
 
   /// The chat's own send; returns the reply, or null if the turn failed.
   final Future<ChatMessage?> Function(String text) _send;
@@ -97,18 +111,18 @@ class VoiceChatController extends ChangeNotifier {
 
     _set(VoiceState.listening);
     final String? text;
+    // The wake word's microphone is closed while the phone's recogniser listens here.
+    await _wakeWord?.pauseFor(WakeWordService.reasonTalking);
     try {
-      text = await _voice.listen(onPartialResult: (words) {
-        if (_disposed || _state != VoiceState.listening) return;
-        _transcript = words;
-        notifyListeners();
-      });
+      text = await _voice.listen(onPartialResult: _heard);
     } on VoiceInputException catch (e) {
       _log('listen failed: ${e.kind.name}');
       return _fail(e.kind);
     } catch (e) {
       _log('listen failed: ${e.runtimeType}');
       return _fail(VoiceErrorKind.unknown);
+    } finally {
+      unawaited(_wakeWord?.resumeAfter(WakeWordService.reasonTalking));
     }
     if (_disposed) return;
 
@@ -121,6 +135,80 @@ class VoiceChatController extends ChangeNotifier {
     _log('sending recognized text');
     await send(text);
     _log('send complete');
+  }
+
+  void _heard(String words) {
+    if (_disposed || _state != VoiceState.listening) return;
+    _transcript = words;
+    notifyListeners();
+  }
+
+  /// "Hey Child" was heard: listens for the question without a tap, sends only the question
+  /// through the same chat send, and reads the reply aloud if "Voice replies" is on. Silence, a
+  /// timeout, cancelling or a locked phone the user does not unlock all return quietly to
+  /// waiting for the wake phrase. Never shows a permission dialog.
+  Future<void> listenAfterWakeWord() async {
+    final wake = _wakeWord;
+    if (wake == null) return;
+    // Already talking with the microphone button: that conversation wins.
+    if (_state == VoiceState.listening ||
+        _state == VoiceState.processing ||
+        _state == VoiceState.requestingPermission) {
+      return wake.commandEnded();
+    }
+    _log('wake word: listening for the question');
+    await stopSpeaking();
+    if (!_voice.isAvailable) {
+      _fail(VoiceErrorKind.unavailable);
+      return wake.commandEnded();
+    }
+    final permission = await _permissions.microphoneStatus();
+    if (_disposed) return wake.commandEnded();
+    if (!permission.isUsable) {
+      _fail(permission == PermissionState.permanentlyDenied || permission == PermissionState.restricted
+          ? VoiceErrorKind.permissionBlocked
+          : VoiceErrorKind.permissionDenied);
+      return wake.commandEnded();
+    }
+    if (!await wake.prepareForQuestion() || _disposed) {
+      if (!_disposed) _reset();
+      return wake.commandEnded();
+    }
+
+    _error = null;
+    _transcript = '';
+    _set(VoiceState.listening);
+    wake.commandListening();
+    String? heard;
+    try {
+      heard = await _voice.listen(onPartialResult: _heard).timeout(wakeQuestionTimeout, onTimeout: () async {
+        _log('wake word: question timed out');
+        await _voice.cancelListening();
+        return null;
+      });
+    } on VoiceInputException catch (e) {
+      _log('wake word: listen failed: ${e.kind.name}');
+      if (!_disposed) _fail(e.kind);
+      return wake.commandEnded();
+    } catch (e) {
+      _log('wake word: listen failed: ${e.runtimeType}');
+      if (!_disposed) _fail(VoiceErrorKind.unknown);
+      return wake.commandEnded();
+    }
+    if (_disposed) return wake.commandEnded();
+
+    final question = stripWakePhrase(heard ?? '');
+    if (question.isEmpty) {
+      // Only the wake phrase, or nothing: back to waiting for "Hey Child".
+      _reset();
+      return wake.commandEnded();
+    }
+    _transcript = '';
+    _set(VoiceState.idle);
+    wake.commandHeard();
+    _log('wake word: sending the question');
+    await send(question);
+    wake.commandFinished();
   }
 
   /// Ends the utterance; what was heard so far is sent once.

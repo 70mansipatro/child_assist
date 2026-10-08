@@ -12,6 +12,7 @@ class AppSettingsScreen extends StatefulWidget {
     required this.themeMode,
     required this.onLogout,
     this.onOpenNotificationSettings,
+    this.onOpenVoiceAssistant,
   });
 
   /// Holds the "Voice replies" choice shared with Chat.
@@ -21,6 +22,9 @@ class AppSettingsScreen extends StatefulWidget {
 
   /// Opens Notification settings (which kinds of notifications the account receives).
   final VoidCallback? onOpenNotificationSettings;
+
+  /// Opens Voice Assistant (the "Hey Child" wake word).
+  final VoidCallback? onOpenVoiceAssistant;
 
   @override
   State<AppSettingsScreen> createState() => _AppSettingsScreenState();
@@ -84,21 +88,35 @@ class _AppSettingsScreenState extends State<AppSettingsScreen> {
                 FadeSlideIn(
                   child: AppCard(
                     padding: const EdgeInsets.symmetric(vertical: 4),
-                    child: ListenableBuilder(
-                      listenable: tts,
-                      builder: (context, _) => MenuTile(
-                        icon: Icons.record_voice_over_rounded,
-                        gradient: AppGradients.microphone,
-                        title: 'Voice Replies',
-                        subtitle: tts.isAvailable
-                            ? 'Read Child Assist\'s replies aloud'
-                            : 'Not available on this device',
-                        onTap: tts.isAvailable ? () => tts.repliesEnabled = !tts.repliesEnabled : null,
-                        trailing: Switch(
-                          value: tts.isAvailable && tts.repliesEnabled,
-                          onChanged: tts.isAvailable ? (on) => tts.repliesEnabled = on : null,
+                    child: Column(
+                      children: [
+                        ListenableBuilder(
+                          listenable: tts,
+                          builder: (context, _) => MenuTile(
+                            icon: Icons.record_voice_over_rounded,
+                            gradient: AppGradients.microphone,
+                            title: 'Voice Replies',
+                            subtitle: tts.isAvailable
+                                ? 'Read Child Assist\'s replies aloud'
+                                : 'Not available on this device',
+                            onTap: tts.isAvailable ? () => tts.repliesEnabled = !tts.repliesEnabled : null,
+                            trailing: Switch(
+                              value: tts.isAvailable && tts.repliesEnabled,
+                              onChanged: tts.isAvailable ? (on) => tts.repliesEnabled = on : null,
+                            ),
+                          ),
                         ),
-                      ),
+                        if (widget.onOpenVoiceAssistant != null) ...[
+                          divider,
+                          MenuTile(
+                            icon: Icons.settings_voice_rounded,
+                            gradient: AppGradients.brand,
+                            title: 'Voice Assistant',
+                            subtitle: 'Wake Word: say “Hey Child” hands-free',
+                            onTap: widget.onOpenVoiceAssistant,
+                          ),
+                        ],
+                      ],
                     ),
                   ),
                 ),

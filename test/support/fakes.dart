@@ -26,10 +26,13 @@ import 'package:child_assist/features/location/services/background_location_sour
 import 'package:child_assist/features/location/services/location_service.dart';
 import 'package:child_assist/features/photos/services/photo_gallery_service.dart';
 import 'package:child_assist/core/notifications/notification_service.dart';
+import 'package:child_assist/features/voice_assistant/data/wake_word_platform.dart';
 
 import 'fake_notifications.dart';
+import 'fake_wake_word.dart';
 
 export 'fake_notifications.dart';
+export 'fake_wake_word.dart';
 
 const testPassword = 'password123';
 
@@ -295,6 +298,7 @@ class FakeBackend {
     TextToSpeechService? textToSpeech,
     ProfilePhotoPlatform? profilePhotoPlatform,
     PushPlatform? pushPlatform,
+    WakeWordPlatform? wakeWordPlatform,
   }) =>
       AppServices.create(
         apiClient: ApiClient(baseUrl: 'http://test', httpClient: client),
@@ -312,6 +316,7 @@ class FakeBackend {
         textToSpeech: textToSpeech ?? FakeTextToSpeech(),
         profilePhotoPlatform: profilePhotoPlatform ?? FakeProfilePhotoPlatform(),
         pushPlatform: pushPlatform ?? FakePushPlatform(),
+        wakeWordPlatform: wakeWordPlatform ?? FakeWakeWordPlatform(),
       );
 
   Future<http.Response> _handle(http.Request req) async {

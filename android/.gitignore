@@ -5,6 +5,9 @@ gradle-wrapper.jar
 /gradlew.bat
 /local.properties
 GeneratedPluginRegistrant.java
+/.kotlin/
+# Downloaded and checksum-verified by app/build.gradle.kts (sherpa-onnx, for the wake word).
+/app/libs/
 .cxx/
 
 # Remember to never publicly share your keystore.
