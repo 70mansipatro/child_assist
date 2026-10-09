@@ -15,6 +15,7 @@ import android.telephony.TelephonyManager
 import com.example.child_assist.wakeword.WakeWordChannel
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 import java.io.FileNotFoundException
@@ -65,6 +66,20 @@ class MainActivity : FlutterActivity() {
     } catch (e: PackageManager.NameNotFoundException) {
         null
     }
+
+    /**
+     * One Flutter engine for the whole app process, kept when this screen is closed (swiped from
+     * Recents, or closed by the system to save memory). While "Hey Child" is on, its service keeps
+     * the process running; with the engine still alive, a question can still be heard and answered
+     * after the screen is gone. Without it, the wake phrase was heard but nothing could take it.
+     * Plugins are registered when the engine is created; the channels below are re-attached to each
+     * new screen in [configureFlutterEngine].
+     */
+    override fun provideFlutterEngine(context: Context): FlutterEngine =
+        FlutterEngineCache.getInstance().get(ENGINE_ID)
+            ?: FlutterEngine(context.applicationContext).also { FlutterEngineCache.getInstance().put(ENGINE_ID, it) }
+
+    override fun shouldDestroyEngineWithHost(): Boolean = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -260,6 +275,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private companion object {
+        const val ENGINE_ID = "child_assist_main"
         const val REQUEST_FOLDER = 4711
         const val REQUEST_DOCUMENTS = 4712
     }

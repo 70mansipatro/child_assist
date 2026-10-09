@@ -45,7 +45,10 @@ import com.example.child_assist.R
 class WakeWordService : Service() {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var audioManager: AudioManager
-    private var detector: WakeWordDetector? = null
+    private var detector: WakeEngine? = null
+
+    /** The on-device recogniser failed on this phone: the keyword spotter is used instead. */
+    private var spotterOnly = false
     private var tuning = WakeWordTuning()
     private val suspensions = linkedSetOf<String>()
     private var lastDetection = 0L
@@ -211,7 +214,7 @@ class WakeWordService : Service() {
     /** Opens or closes the microphone to match the current reasons, and updates the notification. */
     private fun apply() {
         if (suspensions.isEmpty()) {
-            val current = detector ?: WakeWordDetector(this, tuning, ::onDetected, ::onFailure) { main.post { refresh() } }.also { detector = it }
+            val current = detector ?: newEngine().also { detector = it }
             current.start()
         } else {
             detector?.stop()
@@ -228,11 +231,24 @@ class WakeWordService : Service() {
     // ---------------------------------------------------------------------------------------------
     // Detection
 
-    private fun onDetected(keyword: String) {
-        main.post { handleDetected(keyword) }
+    /**
+     * The phone's on-device recogniser where there is one (it understood real voices that the
+     * keyword spotter missed), otherwise the keyword spotter. Both work offline.
+     */
+    private fun newEngine(): WakeEngine {
+        val refreshLater = { _: Boolean -> main.post { refresh() }; Unit }
+        if (!spotterOnly && RecognizerWakeDetector.isAvailable(this)) {
+            return RecognizerWakeDetector(this, ::onDetected, ::onFailure, refreshLater)
+        }
+        WakeLog.d("wake engine: keyword spotter")
+        return WakeWordDetector(this, tuning, { keyword -> onDetected(keyword, "") }, ::onFailure, refreshLater)
     }
 
-    private fun handleDetected(keyword: String) {
+    private fun onDetected(keyword: String, question: String) {
+        main.post { handleDetected(keyword, question) }
+    }
+
+    private fun handleDetected(keyword: String, question: String) {
         val now = SystemClock.elapsedRealtime()
         // One phrase can be reported twice in a row; and audio still in flight right after a
         // pause began must not start a second question.
@@ -246,7 +262,7 @@ class WakeWordService : Service() {
         WakeLog.d("microphone handed to speech recognition: ${detector?.isRunning != true}")
         // No beep here: the speech recogniser takes about a second to open the microphone, and words
         // spoken before that are lost. Flutter plays the cue ([playCue]) once it really listens.
-        if (WakeWordBridge.events != null) WakeWordBridge.emitDetected(keyword) else WakeWordBridge.markActivation()
+        if (WakeWordBridge.events != null) WakeWordBridge.emitDetected(keyword, question) else WakeWordBridge.markActivation()
         if (!WakeWordBridge.activityVisible) openApp()
     }
 
@@ -312,7 +328,14 @@ class WakeWordService : Service() {
                 WakeWordBridge.issue = ISSUE_PERMISSION
                 shutDown()
             }
-            WakeWordDetector.Failure.ENGINE -> {
+            WakeWordDetector.Failure.ENGINE -> if (detector is RecognizerWakeDetector) {
+                // No on-device model for the phone's language (or no recogniser after all).
+                WakeLog.w("on-device recogniser failed; using the keyword spotter")
+                spotterOnly = true
+                detector?.release()
+                detector = null
+                apply()
+            } else {
                 WakeWordBridge.issue = ISSUE_ENGINE
                 shutDown()
             }

@@ -161,7 +161,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _onHide() {
-    _voice.interrupt();
+    _voice.interrupt(keepWakeQuestion: true);
     widget.wakeWordService?.appHidden();
   }
 

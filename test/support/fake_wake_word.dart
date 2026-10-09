@@ -141,11 +141,12 @@ class FakeWakeWordPlatform implements WakeWordPlatform {
 
   /// Someone says "Hey Child". Like the phone, it is only heard while the microphone is open.
   /// Returns whether it was heard.
-  bool sayWakePhrase({String keyword = 'HEY_CHILD'}) {
+  /// [question]: asked in the same breath ("Hi Child, what is my name?"), heard by the phone.
+  bool sayWakePhrase({String keyword = 'HEY_CHILD', String question = ''}) {
     if (!listening) return false;
     suspended.add('interaction');
     _set();
-    _events.add(WakeWordDetectedEvent(keyword));
+    _events.add(WakeWordDetectedEvent(keyword, question: question));
     return true;
   }
 

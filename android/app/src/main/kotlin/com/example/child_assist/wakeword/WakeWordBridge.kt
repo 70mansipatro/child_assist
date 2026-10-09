@@ -92,7 +92,8 @@ object WakeWordBridge {
         events?.success(status(context))
     }
 
-    fun emitDetected(keyword: String) {
-        events?.success(mapOf("type" to "detected", "keyword" to keyword))
+    /** [question]: what was said right after the phrase in the same breath, or empty. */
+    fun emitDetected(keyword: String, question: String = "") {
+        events?.success(mapOf("type" to "detected", "keyword" to keyword, "question" to question))
     }
 }

@@ -4,7 +4,10 @@ const wakePhrases = ['Hey Child', 'Hi Child'];
 // "Hey Child", "Hi Child" and how speech recognisers tend to write them ("hay child", "hi,
 // child!"), at the very start of what was heard. A lone "Child," is matched only when followed by
 // a comma or nothing, so a question like "Child safety tips" is left alone.
-final _greeted = RegExp(r'^(?:hey|hi|hay|hai|hei)\b[\s,.!-]*(?:child|chiled|chile)\b[\s,.!?:;-]*', caseSensitive: false);
+final _greeted = RegExp(
+  r'^(?:hey|hi|hii|hay|hai|hei|high)\b[\s,.!-]*(?:child|chiled|chile|chaild|chyld|childe)\b[\s,.!?:;-]*',
+  caseSensitive: false,
+);
 final _bare = RegExp(r'^child\s*(?:[,.!?:;-][\s,.!?:;-]*|$)', caseSensitive: false);
 
 /// What the user asked, without the wake phrase: "Hey Child, where did I go today?" becomes

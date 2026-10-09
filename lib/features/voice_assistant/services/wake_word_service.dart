@@ -446,7 +446,7 @@ class WakeWordService extends ChangeNotifier {
     _events = _platform.events.listen(
       (event) => switch (event) {
         WakeWordStatusEvent(:final status) => _apply(status),
-        WakeWordDetectedEvent() => _onDetected(),
+        WakeWordDetectedEvent(:final question) => _onDetected(question),
       },
       onError: (Object e) => debugPrint('[WakeWord] event error: ${e.runtimeType}'),
     );
@@ -514,7 +514,18 @@ class WakeWordService extends ChangeNotifier {
     _notify();
   }
 
-  void _onDetected() {
+  /// What was said with the phrase in the same breath, for the question that is about to start.
+  String _inlineQuestion = '';
+
+  /// Once per wake phrase: the question said together with it ("Hi Child, what is my name?"), or
+  /// empty if the user waits for the cue to ask.
+  String takeInlineQuestion() {
+    final question = _inlineQuestion;
+    _inlineQuestion = '';
+    return question;
+  }
+
+  void _onDetected([String question = '']) {
     if (!_enabled || _owner == null) {
       unawaited(_platform.resume(reasonInteraction));
       return;
@@ -527,6 +538,7 @@ class WakeWordService extends ChangeNotifier {
     // Heard again while a question is in progress: one question at a time.
     if (!_machine.fire(WakeWordEvent.detected)) return;
     _issue = null;
+    _inlineQuestion = question.trim();
     _pendingActivation = true;
     _activationTimer?.cancel();
     // If Child Assist never comes on screen (e.g. the notification was ignored), stop waiting.
@@ -537,6 +549,7 @@ class WakeWordService extends ChangeNotifier {
   }
 
   void _endInteraction(WakeWordEvent event) {
+    _inlineQuestion = '';
     _finishWhenSilent = false;
     _pendingActivation = false;
     _activationTimer?.cancel();
@@ -567,6 +580,7 @@ class WakeWordService extends ChangeNotifier {
   }
 
   void _cancelInteraction() {
+    _inlineQuestion = '';
     _pendingActivation = false;
     _finishWhenSilent = false;
     _activationTimer?.cancel();

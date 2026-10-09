@@ -76,10 +76,14 @@ class WakeWordStatusEvent extends WakeWordPlatformEvent {
 }
 
 class WakeWordDetectedEvent extends WakeWordPlatformEvent {
-  const WakeWordDetectedEvent(this.keyword);
+  const WakeWordDetectedEvent(this.keyword, {this.question = ''});
 
   /// "HEY_CHILD" or "HI_CHILD".
   final String keyword;
+
+  /// What was said right after the phrase in the same breath ("Hi Child, what is my name?"), or
+  /// empty. Recognised on the phone, offline.
+  final String question;
 }
 
 enum WakeWordStartResult { started, permission, startBlocked, unsupported }
@@ -171,7 +175,7 @@ class MethodChannelWakeWordPlatform implements WakeWordPlatform {
     if (raw is! Map) return null;
     return switch (raw['type']) {
       'status' => WakeWordStatusEvent(NativeWakeStatus.fromMap(raw)),
-      'detected' => WakeWordDetectedEvent(raw['keyword'] as String? ?? ''),
+      'detected' => WakeWordDetectedEvent(raw['keyword'] as String? ?? '', question: raw['question'] as String? ?? ''),
       _ => null,
     };
   }

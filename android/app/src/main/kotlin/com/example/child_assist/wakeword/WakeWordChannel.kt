@@ -26,6 +26,9 @@ import io.flutter.plugin.common.MethodChannel
 class WakeWordChannel(private val activity: Activity) {
     private val context: Context get() = activity.applicationContext
 
+    /** This screen was closed; the engine (and these handlers) may outlive it until a new one opens. */
+    private var destroyed = false
+
     fun register(engine: FlutterEngine) {
         // Before the service exists too, so a deferred or refused start shows in the diagnostics.
         WakeLog.init(context)
@@ -56,7 +59,9 @@ class WakeWordChannel(private val activity: Activity) {
                     result.success(null)
                 }
                 "keepScreenOn" -> {
-                    if (call.argument<Boolean>("on") == true) {
+                    if (destroyed) {
+                        // No window to keep on.
+                    } else if (call.argument<Boolean>("on") == true) {
                         activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     } else {
                         activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -144,6 +149,7 @@ class WakeWordChannel(private val activity: Activity) {
      * lock screen comes back.
      */
     fun showOverLockScreen(show: Boolean) {
+        if (destroyed) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             activity.setShowWhenLocked(show)
             activity.setTurnScreenOn(show)
@@ -158,6 +164,7 @@ class WakeWordChannel(private val activity: Activity) {
     private fun requestUnlock(result: MethodChannel.Result) {
         val keyguard = keyguard()
         if (!keyguard.isKeyguardLocked) return result.success(true)
+        if (destroyed) return result.success(false)
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return result.success(false)
         keyguard.requestDismissKeyguard(activity, object : KeyguardManager.KeyguardDismissCallback() {
             override fun onDismissSucceeded() = result.success(true)
@@ -213,8 +220,12 @@ class WakeWordChannel(private val activity: Activity) {
         }
     }
 
+    /**
+     * The screen is gone, but the Flutter engine is kept (see MainActivity), so the event channel
+     * stays connected: a wake phrase heard now still reaches the app.
+     */
     fun onDestroy() {
+        destroyed = true
         WakeWordBridge.activityVisible = false
-        WakeWordBridge.events = null
     }
 }

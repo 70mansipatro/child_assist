@@ -141,6 +141,12 @@ void main() {
       expect(stripWakePhrase('hey child... show me my photos'), 'show me my photos');
     });
 
+    test('Indian English spellings of the wake phrase are removed too', () {
+      expect(stripWakePhrase('Hai child what is my name'), 'what is my name');
+      expect(stripWakePhrase('high child, find my python document'), 'find my python document');
+      expect(stripWakePhrase('Hey chaild where did I travel today'), 'where did I travel today');
+    });
+
     test('only the wake phrase is an empty question', () {
       for (final heard in ['Hey Child', 'hi child!', 'Child', '  ', '']) {
         expect(stripWakePhrase(heard), '', reason: heard);
@@ -535,6 +541,36 @@ void main() {
       await tester.pump(const Duration(milliseconds: 900));
       await frames(tester);
       expect(voice.calls, containsAllInOrder(['listen', 'stop']));
+      expect(backend.chatRequests.single['message'], 'what is my name');
+    });
+
+    testWidgets('"Hi Child, what is my name?" in one breath is answered without listening again', (tester) async {
+      await startApp(tester);
+      await switchOn(tester);
+      tts.repliesEnabled = true;
+      expect(phone.sayWakePhrase(keyword: 'HI_CHILD', question: 'what is my name'), isTrue);
+      await frames(tester);
+
+      expect(voice.calls, isEmpty, reason: 'the question came with the wake phrase');
+      expect(backend.chatRequests.single['message'], 'what is my name');
+      expect(tts.spoken, ['You said: what is my name']);
+      tts.finishSpeaking();
+      await tester.pump(const Duration(milliseconds: 800));
+      expect(wake().state, WakeWordState.listeningForWakeWord);
+      expect(phone.listening, isTrue);
+    });
+
+    testWidgets('pressing Home while asking after "Hi Child" does not cancel the question', (tester) async {
+      await startApp(tester);
+      await switchOn(tester);
+      await sayHeyChild(tester);
+      expect(voice.isListening, isTrue);
+
+      toBackground(tester);
+      await frames(tester);
+      expect(voice.isListening, isTrue, reason: 'the wake question goes on in the background');
+      voice.finish('what is my name');
+      await frames(tester);
       expect(backend.chatRequests.single['message'], 'what is my name');
     });
 

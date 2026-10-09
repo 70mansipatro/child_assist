@@ -188,7 +188,7 @@ class WakeWordDetector(
     private val onFailure: (Failure) -> Unit,
     /** Called on the worker thread when the microphone really opens (true) or closes (false). */
     private val onRecording: (Boolean) -> Unit = {},
-) {
+) : WakeEngine {
     enum class Failure {
         /** The model could not be loaded. */
         ENGINE,
@@ -215,14 +215,14 @@ class WakeWordDetector(
     private val engineLock = Any()
 
     /** The audio session of the current recording, to recognise it in recording callbacks. */
-    val audioSessionId: Int get() = session?.record?.audioSessionId ?: 0
+    override val audioSessionId: Int get() = session?.record?.audioSessionId ?: 0
 
-    val isRunning: Boolean get() = session?.active == true
+    override val isRunning: Boolean get() = session?.active == true
 
     /** The microphone is open and audio is being checked for the phrase (not just starting). */
-    val isRecording: Boolean get() = session?.let { it.active && it.recording } == true
+    override val isRecording: Boolean get() = session?.let { it.active && it.recording } == true
 
-    fun start() {
+    override fun start() {
         if (session?.active == true) return
         // A previous session still closing finishes first (bounded), so the microphone has one owner.
         session?.thread?.join(STOP_TIMEOUT_MS)
@@ -232,7 +232,7 @@ class WakeWordDetector(
     }
 
     /** Stops listening and closes the microphone. Returns once the worker has let go of it. */
-    fun stop() {
+    override fun stop() {
         val current = session ?: return
         current.active = false
         try {
@@ -246,7 +246,7 @@ class WakeWordDetector(
     }
 
     /** Stops and frees the model. */
-    fun release() {
+    override fun release() {
         stop()
         synchronized(engineLock) {
             engine?.release()

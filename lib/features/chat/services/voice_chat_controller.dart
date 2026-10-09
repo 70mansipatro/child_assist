@@ -202,6 +202,13 @@ class VoiceChatController extends ChangeNotifier {
   }
 
   Future<void> _answerWakeQuestion(WakeWordService wake) async {
+    // "Hi Child, what is my name?" in one breath: the phone already heard the question.
+    final inline = stripWakePhrase(wake.takeInlineQuestion());
+    if (inline.isNotEmpty) {
+      wake.commandListening();
+      wake.logStep('question heard together with the wake phrase');
+      return _sendWakeQuestion(wake, inline);
+    }
     _set(VoiceState.listening);
     wake.commandListening();
     wake.logStep('speech recognition starting');
@@ -251,6 +258,11 @@ class VoiceChatController extends ChangeNotifier {
       _reset();
       return wake.commandEnded();
     }
+    return _sendWakeQuestion(wake, question);
+  }
+
+  /// Sends the question through the normal chat send and reads the answer aloud.
+  Future<void> _sendWakeQuestion(WakeWordService wake, String question) async {
     _transcript = '';
     _set(VoiceState.idle);
     wake.commandHeard();
@@ -337,7 +349,12 @@ class VoiceChatController extends ChangeNotifier {
   }
 
   /// The app went to the background: stop the microphone and any speech right away.
-  Future<void> interrupt() async {
+  ///
+  /// [keepWakeQuestion]: a question started by the wake phrase goes on (it is meant to work with
+  /// Child Assist in the background, e.g. after the user presses Home while asking); tap-to-talk
+  /// still stops.
+  Future<void> interrupt({bool keepWakeQuestion = false}) async {
+    if (keepWakeQuestion && _wakeQuestion) return;
     await cancelListening();
     await stopSpeaking();
   }
