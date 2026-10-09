@@ -6,7 +6,7 @@ import 'package:flutter/services.dart';
 /// were measured. The phone clamps both values to a safe range.
 @immutable
 class WakeWordTuning {
-  const WakeWordTuning({this.threshold = 0.20, this.boost = 1.0, this.trailingBlanks = 4});
+  const WakeWordTuning({this.threshold = 0.06, this.boost = 2.5, this.trailingBlanks = 2});
 
   /// Stricter (fewer false activations, more missed phrases) as it goes up.
   final double threshold;

@@ -523,6 +523,32 @@ void main() {
       expect(backend.chatRequests.single['message'], 'what is my name');
     });
 
+    testWidgets('after the cue there is time to start asking; once asked, a short silence sends it', (tester) async {
+      await startApp(tester);
+      await switchOn(tester);
+      await sayHeyChild(tester);
+      expect(voice.lastPauseFor, const Duration(seconds: 8), reason: 'people pause after the cue before asking');
+
+      voice.hear('what is my name');
+      await tester.pump(const Duration(milliseconds: 1000));
+      expect(voice.calls, ['listen'], reason: 'still speaking: not cut off');
+      await tester.pump(const Duration(milliseconds: 900));
+      await frames(tester);
+      expect(voice.calls, containsAllInOrder(['listen', 'stop']));
+      expect(backend.chatRequests.single['message'], 'what is my name');
+    });
+
+    testWidgets('tap-to-talk keeps its own pause', (tester) async {
+      await startApp(tester);
+      await openTab(tester, 'Chat');
+      await tester.tap(find.byTooltip('Voice input'));
+      await frames(tester);
+      expect(voice.calls, ['listen']);
+      expect(voice.lastPauseFor, isNull);
+      voice.finish('hello');
+      await frames(tester);
+    });
+
     testWidgets('the wake word reopens the microphone only after the recogniser released it', (tester) async {
       await startApp(tester);
       await switchOn(tester);

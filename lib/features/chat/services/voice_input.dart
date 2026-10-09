@@ -33,8 +33,13 @@ abstract class VoiceInput {
   /// [onPartialResult] receives the words recognised so far while the user is speaking.
   /// Throws [VoiceInputException] when recognition fails. Completes exactly once per call.
   /// [onReady] is called once, when the recogniser is really receiving audio (words spoken
-  /// before that are not heard).
-  Future<String?> listen({ValueChanged<String>? onPartialResult, VoidCallback? onReady, String? localeId});
+  /// before that are not heard). [pauseFor] overrides how long a silence ends the utterance.
+  Future<String?> listen({
+    ValueChanged<String>? onPartialResult,
+    VoidCallback? onReady,
+    Duration? pauseFor,
+    String? localeId,
+  });
 
   /// Stops listening and lets [listen] complete with what was recognised so far.
   Future<void> stopListening();
@@ -117,7 +122,12 @@ class UnavailableVoiceInput implements VoiceInput {
   Future<bool> initialize() async => false;
 
   @override
-  Future<String?> listen({ValueChanged<String>? onPartialResult, VoidCallback? onReady, String? localeId}) async =>
+  Future<String?> listen({
+    ValueChanged<String>? onPartialResult,
+    VoidCallback? onReady,
+    Duration? pauseFor,
+    String? localeId,
+  }) async =>
       throw const VoiceInputException(VoiceErrorKind.unavailable);
 
   @override
@@ -220,7 +230,12 @@ class SpeechToTextVoiceInput implements VoiceInput {
   }
 
   @override
-  Future<String?> listen({ValueChanged<String>? onPartialResult, VoidCallback? onReady, String? localeId}) async {
+  Future<String?> listen({
+    ValueChanged<String>? onPartialResult,
+    VoidCallback? onReady,
+    Duration? pauseFor,
+    String? localeId,
+  }) async {
     if (_pending != null) throw const VoiceInputException(VoiceErrorKind.busy);
     if (!await initialize()) throw const VoiceInputException(VoiceErrorKind.unavailable);
 
@@ -236,7 +251,7 @@ class SpeechToTextVoiceInput implements VoiceInput {
         onSoundLevelChange: _handleSoundLevel,
         listenOptions: SpeechListenOptions(
           listenFor: listenFor,
-          pauseFor: pauseFor,
+          pauseFor: pauseFor ?? this.pauseFor,
           // Null: the device's own speech language.
           localeId: localeId,
           partialResults: true,

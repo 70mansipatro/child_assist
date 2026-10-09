@@ -29,6 +29,8 @@ class VoiceChatController extends ChangeNotifier {
     required Future<bool> Function() explainPermission,
     WakeWordService? wakeWord,
     this.wakeQuestionTimeout = const Duration(seconds: 15),
+    this.wakeQuestionStartWindow = const Duration(seconds: 8),
+    this.wakeQuestionEndSilence = const Duration(milliseconds: 1800),
   })  : _voice = voiceInput,
         _tts = textToSpeech,
         _permissions = permissionService,
@@ -50,6 +52,14 @@ class VoiceChatController extends ChangeNotifier {
 
   /// The longest a question after the wake phrase may take before listening gives up.
   final Duration wakeQuestionTimeout;
+
+  /// After the cue, how long the user has to start asking. Longer than tap-to-talk's pause: on
+  /// the phone, people took a few seconds after the cue before speaking.
+  final Duration wakeQuestionStartWindow;
+
+  /// Once words were heard, this much silence ends the question, so the answer is not delayed by
+  /// the longer start window.
+  final Duration wakeQuestionEndSilence;
 
   /// The chat's own send; returns the reply, or null if the turn failed.
   final Future<ChatMessage?> Function(String text) _send;
@@ -196,25 +206,39 @@ class VoiceChatController extends ChangeNotifier {
     wake.commandListening();
     wake.logStep('speech recognition starting');
     String? heard;
+    Timer? endOfQuestion;
+    void partial(String words) {
+      _heard(words);
+      if (words.trim().isEmpty) return;
+      endOfQuestion?.cancel();
+      endOfQuestion = Timer(wakeQuestionEndSilence, () {
+        wake.logStep('end of question (silence)');
+        unawaited(_voice.stopListening());
+      });
+    }
+
     try {
       heard = await _voice
-          .listen(onPartialResult: _heard, onReady: wake.questionReady)
+          .listen(onPartialResult: partial, onReady: wake.questionReady, pauseFor: wakeQuestionStartWindow)
           .timeout(wakeQuestionTimeout, onTimeout: () async {
         wake.logStep('speech recognition timed out');
         await _voice.cancelListening();
         return null;
       });
     } on VoiceInputException catch (e) {
+      endOfQuestion?.cancel();
       wake.logStep('speech recognition failed: ${e.kind.name}');
       await _voice.releaseMicrophone();
       if (!_disposed) _fail(e.kind);
       return wake.commandEnded();
     } catch (e) {
+      endOfQuestion?.cancel();
       wake.logStep('speech recognition failed: ${e.runtimeType}');
       await _voice.releaseMicrophone();
       if (!_disposed) _fail(VoiceErrorKind.unknown);
       return wake.commandEnded();
     }
+    endOfQuestion?.cancel();
     // The recogniser lets go of the microphone before anything else uses it.
     await _voice.releaseMicrophone();
     wake.logStep('speech recognition microphone released');

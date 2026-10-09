@@ -467,11 +467,13 @@ class WakeWordService : Service() {
 
         /**
          * A short tone: the question can be asked now. Played once the speech recogniser is really
-         * receiving audio, so the first words are never lost. Best effort (none on silent mode).
+         * receiving audio, so the first words are never lost. On the media volume, like other voice
+         * assistants: the user just spoke to the phone, and the notification sound is muted on silent
+         * mode (seen on the test phone), which left them waiting with no cue. Best effort.
          */
         fun playCue() {
             try {
-                val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 60)
+                val tone = ToneGenerator(AudioManager.STREAM_MUSIC, 80)
                 tone.startTone(ToneGenerator.TONE_PROP_ACK, 150)
                 Handler(Looper.getMainLooper()).postDelayed({ tone.release() }, 400)
                 WakeLog.d("listening cue played")

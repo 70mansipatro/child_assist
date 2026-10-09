@@ -1821,9 +1821,18 @@ class FakeVoiceInput implements VoiceInput {
   /// arrive). Off: a test opens it with [ready], e.g. to speak before the recogniser listens.
   bool readyOnListen = true;
 
+  /// The silence that ends the last utterance, if the caller set one.
+  Duration? lastPauseFor;
+
   @override
-  Future<String?> listen({ValueChanged<String>? onPartialResult, VoidCallback? onReady, String? localeId}) {
+  Future<String?> listen({
+    ValueChanged<String>? onPartialResult,
+    VoidCallback? onReady,
+    Duration? pauseFor,
+    String? localeId,
+  }) {
     calls.add('listen');
+    lastPauseFor = pauseFor;
     if (!available || !initializes) return Future.error(const VoiceInputException(VoiceErrorKind.unavailable));
     _heard = '';
     _onPartial = onPartialResult;

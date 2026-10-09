@@ -26,15 +26,20 @@ import kotlin.math.sqrt
  * same as "Hi Child" and does trigger; no acoustic model can tell those apart.
  */
 data class WakeWordTuning(
-    /** Per-token probability the whole phrase must reach (sherpa-onnx `keywords_threshold`). */
-    val threshold: Float = 0.20f,
-    /** Context boost for the phrase tokens (sherpa-onnx `keywords_score`). */
-    val boost: Float = 1.0f,
     /**
-     * Silence frames (40 ms each) required after "child": rejects "Hey children" without
-     * missing the phrase (sherpa-onnx `num_trailing_blanks`).
+     * Per-token probability the whole phrase must reach (sherpa-onnx `keywords_threshold`).
+     * Lowered from 0.20 (and the boost raised) after a real, non-synthesized Indian English voice
+     * was accepted only occasionally on the test phone while the synthesized clips always were.
      */
-    val trailingBlanks: Int = 4,
+    val threshold: Float = 0.06f,
+    /** Context boost for the phrase tokens (sherpa-onnx `keywords_score`). */
+    val boost: Float = 2.5f,
+    /**
+     * Silence frames (40 ms each) required after "child" (sherpa-onnx `num_trailing_blanks`).
+     * 4 rejected "Hey children" but also missed a real speaker who paused only briefly; 2 accepts
+     * a short pause, at the cost of sometimes accepting "Hey children".
+     */
+    val trailingBlanks: Int = 2,
 ) {
     companion object {
         fun from(map: Map<*, *>?): WakeWordTuning {
@@ -43,7 +48,7 @@ data class WakeWordTuning(
             val boost = (map?.get("boost") as? Number)?.toFloat() ?: defaults.boost
             val blanks = (map?.get("trailingBlanks") as? Number)?.toInt() ?: defaults.trailingBlanks
             // Clamped, so a bad value can neither trigger on everything nor never trigger.
-            return WakeWordTuning(threshold.coerceIn(0.10f, 0.40f), boost.coerceIn(0.5f, 2.0f), blanks.coerceIn(1, 8))
+            return WakeWordTuning(threshold.coerceIn(0.05f, 0.40f), boost.coerceIn(0.5f, 3.0f), blanks.coerceIn(1, 8))
         }
     }
 }
