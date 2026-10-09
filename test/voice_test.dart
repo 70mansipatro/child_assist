@@ -497,7 +497,8 @@ void main() {
       voice.finish('Where did I go today?');
       await tester.pumpAndSettle();
 
-      expect(voice.calls, ['listen', 'stop']);
+      // The recogniser releases the microphone before the wake word may reopen it.
+      expect(voice.calls, ['listen', 'stop', 'release']);
       expect(backend.chatRequests.map((r) => r['message']), ['Where did I go today?']);
       expect(find.text('You said: Where did I go today?'), findsOneWidget);
     });

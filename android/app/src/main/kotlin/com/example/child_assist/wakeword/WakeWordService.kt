@@ -1,6 +1,7 @@
 package com.example.child_assist.wakeword
 
 import android.Manifest
+import android.app.KeyguardManager
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
@@ -136,7 +137,8 @@ class WakeWordService : Service() {
             // Android 11+ does not let a microphone service start while the app is in the
             // background (e.g. Android restarting it after the app was closed). It starts again
             // the next time the app is opened. Never pretend it is listening.
-            WakeLog.w("could not start in the foreground: ${e.javaClass.simpleName}")
+            // The system's message names only the service and the rule that refused it.
+            WakeLog.w("could not start in the foreground: ${e.javaClass.simpleName}: ${e.message}")
             WakeWordBridge.issue = ISSUE_START_BLOCKED
             enterForegroundToStop()
             shutDown()
@@ -238,18 +240,26 @@ class WakeWordService : Service() {
         lastDetection = now
         failures = 0
         WakeLog.d("wake phrase detected")
-        // Free the microphone at once so the question can be heard.
+        // Free the microphone at once so the question can be heard. stop() returns only once the
+        // worker has released the AudioRecord, so the speech recogniser is the only owner after this.
         suspend(REASON_INTERACTION)
-        beep()
+        WakeLog.d("microphone handed to speech recognition: ${detector?.isRunning != true}")
+        // No beep here: the speech recogniser takes about a second to open the microphone, and words
+        // spoken before that are lost. Flutter plays the cue ([playCue]) once it really listens.
         if (WakeWordBridge.events != null) WakeWordBridge.emitDetected(keyword) else WakeWordBridge.markActivation()
         if (!WakeWordBridge.activityVisible) openApp()
     }
 
     /**
-     * Brings Child Assist to the screen for the question. Android 10+ does not let a background
-     * service open an activity, so a full-screen notification does it: with the screen off or
-     * locked it opens the app directly; while the phone is in use it appears as a heads-up
-     * notification the user taps.
+     * Tries to bring Child Assist to the screen for the question. On an unlocked phone the question
+     * does not depend on this: the app (still running behind the current one) listens for it
+     * without its screen. On a locked phone the user must unlock first, and this is how the app
+     * comes up for that.
+     *
+     * Android 10+ does not let a background service open an activity, so a full-screen notification
+     * does it: with the screen off or locked it opens the app directly; while the phone is in use it
+     * appears as a heads-up notification the user taps. Some phones (e.g. Xiaomi HyperOS without
+     * "Display pop-up windows while running in the background") silently drop both, with no error.
      */
     private fun openApp() {
         val intent = Intent(this, MainActivity::class.java).apply {
@@ -257,13 +267,15 @@ class WakeWordService : Service() {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
         if (WakeWordBridge.events == null) WakeWordBridge.markActivation()
+        val locked = (getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager).isKeyguardLocked
         // With "Display over other apps" (optional; the user allows it in Settings) Android lets the
         // app open its screen from the background, so a question works hands-free while another app
         // is in use. Without it, the full-screen notification below does it.
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || Settings.canDrawOverlays(this)) {
             try {
                 startActivity(intent)
-                WakeLog.d("opened the app")
+                // Asked, not confirmed: some phones drop the request without an error.
+                WakeLog.d("asked Android to open the app")
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
             } catch (e: RuntimeException) {
                 WakeLog.w("could not open the app: ${e.javaClass.simpleName}")
@@ -274,7 +286,12 @@ class WakeWordService : Service() {
             .setSmallIcon(R.drawable.ic_stat_child_assist)
             .setColor(ContextCompat.getColor(this, R.color.notification_color))
             .setContentTitle("Wake word detected")
-            .setContentText("Child Assist is listening for your question.")
+            .setContentText(
+                if (locked) "Unlock your phone, then ask Child Assist your question."
+                else "Child Assist is listening for your question.",
+            )
+            // Nothing private: the question and answer are never shown here.
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setFullScreenIntent(open, true)
             .setContentIntent(open)
@@ -282,17 +299,6 @@ class WakeWordService : Service() {
             .setTimeoutAfter(INTERACTION_TIMEOUT_MS)
             .build()
         NotificationManagerCompat.from(this).notifySafely(ACTIVATION_NOTIFICATION_ID, notification)
-    }
-
-    /** A short tone: the question can be asked now. Best effort (no tone on silent mode). */
-    private fun beep() {
-        try {
-            val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 60)
-            tone.startTone(ToneGenerator.TONE_PROP_ACK, 150)
-            main.postDelayed({ tone.release() }, 400)
-        } catch (e: RuntimeException) {
-            // No tone available.
-        }
     }
 
     private fun onFailure(failure: WakeWordDetector.Failure) {
@@ -457,6 +463,21 @@ class WakeWordService : Service() {
         /** Starts (or re-applies) listening. Call only while the app is in the foreground. */
         fun start(context: Context) {
             ContextCompat.startForegroundService(context, Intent(context, WakeWordService::class.java))
+        }
+
+        /**
+         * A short tone: the question can be asked now. Played once the speech recogniser is really
+         * receiving audio, so the first words are never lost. Best effort (none on silent mode).
+         */
+        fun playCue() {
+            try {
+                val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 60)
+                tone.startTone(ToneGenerator.TONE_PROP_ACK, 150)
+                Handler(Looper.getMainLooper()).postDelayed({ tone.release() }, 400)
+                WakeLog.d("listening cue played")
+            } catch (e: RuntimeException) {
+                WakeLog.w("listening cue unavailable: ${e.javaClass.simpleName}")
+            }
         }
 
         fun createChannels(context: Context) {

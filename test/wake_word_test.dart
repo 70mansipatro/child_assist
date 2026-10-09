@@ -233,6 +233,20 @@ void main() {
       await frames(tester);
     }
 
+    /// The user presses Home (or opens another app).
+    void toBackground(WidgetTester tester) {
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    }
+
+    /// Child Assist comes back on screen.
+    void toForeground(WidgetTester tester) {
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    }
+
     // -- Settings -----------------------------------------------------------------------------
 
     testWidgets('Settings > Voice Assistant switches Hey Child on after the microphone dialog', (tester) async {
@@ -365,7 +379,7 @@ void main() {
 
       await tester.pump(const Duration(seconds: 16));
       await frames(tester);
-      expect(voice.calls, ['listen', 'cancel']);
+      expect(voice.calls, ['listen', 'cancel', 'release']);
       expect(backend.chatRequests, isEmpty);
       expect(wake().state, WakeWordState.listeningForWakeWord);
       expect(phone.listening, isTrue);
@@ -474,6 +488,125 @@ void main() {
       expect(wake().state, WakeWordState.disabled);
     });
 
+    testWidgets('"Turn off" during a question also closes the recogniser microphone; nothing is sent', (tester) async {
+      await startApp(tester);
+      await switchOn(tester);
+      await sayHeyChild(tester);
+      expect(voice.isListening, isTrue);
+
+      phone.report(const NativeWakeStatus());
+      await frames(tester);
+      expect(voice.isListening, isFalse);
+      expect(voice.calls, containsAllInOrder(['listen', 'cancel']));
+      expect(wake().state, WakeWordState.disabled);
+      expect(backend.chatRequests, isEmpty);
+    });
+
+    // -- Microphone handoff ---------------------------------------------------------------------
+
+    testWidgets('the cue plays when the recogniser really listens, not when the phrase is heard', (tester) async {
+      await startApp(tester);
+      await switchOn(tester);
+      voice.readyOnListen = false;
+      await sayHeyChild(tester);
+      expect(voice.calls, ['listen']);
+      expect(phone.cues, 0, reason: 'the recogniser is not receiving audio yet; words would be lost');
+
+      voice.ready();
+      await frames(tester);
+      expect(phone.cues, 1);
+      voice.hear('what is');
+      await frames(tester);
+      expect(phone.cues, 1, reason: 'one cue per question');
+      voice.finish('what is my name');
+      await frames(tester);
+      expect(backend.chatRequests.single['message'], 'what is my name');
+    });
+
+    testWidgets('the wake word reopens the microphone only after the recogniser released it', (tester) async {
+      await startApp(tester);
+      await switchOn(tester);
+      await sayHeyChild(tester);
+      phone.calls.clear();
+
+      voice.silence();
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(voice.releases, 1, reason: 'the recogniser let go first');
+      expect(phone.listening, isFalse, reason: 'not two microphone owners at once');
+
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(phone.listening, isTrue);
+      expect(phone.calls, contains('resume interaction'));
+    });
+
+    testWidgets('repeated questions work without restarting the app', (tester) async {
+      await startApp(tester);
+      await switchOn(tester);
+      tts.repliesEnabled = true;
+      for (final question in ['what is my name', 'where did I travel today', 'find my python document']) {
+        await sayHeyChild(tester);
+        voice.finish(question);
+        await frames(tester);
+        expect(tts.spoken.last, 'You said: $question');
+        tts.finishSpeaking();
+        await tester.pump(const Duration(milliseconds: 800));
+        expect(wake().state, WakeWordState.listeningForWakeWord);
+        expect(phone.listening, isTrue);
+      }
+      expect([for (final r in backend.chatRequests) r['message']],
+          ['what is my name', 'where did I travel today', 'find my python document']);
+      expect(phone.cues, 3);
+    });
+
+    testWidgets('no connection: the question fails safely and listening resumes', (tester) async {
+      await startApp(tester);
+      await switchOn(tester);
+      tts.repliesEnabled = true;
+      backend.offline = true;
+      await sayHeyChild(tester);
+      voice.finish('what is my name');
+      await frames(tester);
+
+      expect(tts.spoken, isEmpty, reason: 'no answer is made up');
+      expect(wake().state, WakeWordState.listeningForWakeWord);
+      expect(phone.listening, isTrue);
+
+      backend.offline = false;
+      await sayHeyChild(tester);
+      voice.finish('what is my name');
+      await frames(tester);
+      expect(tts.spoken, ['You said: what is my name']);
+      tts.finishSpeaking();
+      await tester.pump(const Duration(milliseconds: 800));
+      expect(phone.listening, isTrue);
+    });
+
+    testWidgets('an answer is not read aloud if the phone locked while it was on its way', (tester) async {
+      await startApp(tester);
+      await switchOn(tester);
+      tts.repliesEnabled = true;
+      await sayHeyChild(tester);
+      phone.lock = const DeviceLockState(locked: true, secure: true);
+      voice.finish('what is my name');
+      await frames(tester);
+
+      expect(backend.chatRequests.single['message'], 'what is my name');
+      expect(tts.spoken, isEmpty, reason: 'private answers are never spoken over the lock screen');
+      expect(wake().state, WakeWordState.listeningForWakeWord);
+    });
+
+    testWidgets('"Hi Child" from the Home screen works the same way', (tester) async {
+      await startApp(tester);
+      await switchOn(tester);
+      toBackground(tester);
+      await frames(tester);
+      expect(phone.sayWakePhrase(keyword: 'HI_CHILD'), isTrue);
+      await frames(tester);
+      voice.finish('Hi Child, find my Python document');
+      await frames(tester);
+      expect(backend.chatRequests.single['message'], 'find my Python document');
+    });
+
     // -- Failures, calls, the lock screen ---------------------------------------------------
 
     testWidgets('a microphone failure shows an error, never "listening"', (tester) async {
@@ -530,6 +663,8 @@ void main() {
       phone.unlockSucceeds = true;
       await sayHeyChild(tester);
       expect(voice.calls, ['listen']);
+      voice.silence();
+      await frames(tester);
     });
 
     testWidgets('"Answer while locked": only Chat shows above the lock screen, then the lock returns', (tester) async {
@@ -715,22 +850,66 @@ void main() {
       expect(find.text('Here is your answer...'), findsNothing);
     });
 
-    testWidgets('app in the background: the question starts once Child Assist is on screen', (tester) async {
+    testWidgets('Home screen, phone unlocked: the question is heard and answered with no tap and no app screen', (tester) async {
+      // E.g. Xiaomi HyperOS silently refuses to bring the app up from the background; the
+      // question must not depend on it.
       await startApp(tester);
       await switchOn(tester);
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      tts.repliesEnabled = true;
+      toBackground(tester);
       await frames(tester);
 
       await sayHeyChild(tester);
-      expect(voice.calls, isEmpty, reason: 'nothing is heard until the app is on screen');
+      expect(voice.calls, ['listen'], reason: 'heard while Child Assist stays in the background');
+      expect(wake().state, WakeWordState.listeningForCommand);
+      expect(phone.listening, isFalse, reason: 'one microphone owner: the recogniser');
+
+      voice.finish('where did I go today');
+      await frames(tester);
+      expect(backend.chatRequests.single['message'], 'where did I go today');
+      expect(tts.spoken, ['You said: where did I go today'], reason: 'the real answer, read aloud');
+      expect(phone.sayWakePhrase(), isFalse, reason: "Child Assist's own voice cannot wake it");
+
+      tts.finishSpeaking();
+      await tester.pump(const Duration(milliseconds: 800));
+      expect(wake().state, WakeWordState.listeningForWakeWord);
+      expect(phone.listening, isTrue);
+
+      // The answer is in Chat when the user opens the app.
+      toForeground(tester);
+      await frames(tester);
+      expect(find.text('You said: where did I go today'), findsOneWidget);
+    });
+
+    testWidgets('another tab and the app in the background: Chat is built and takes the question', (tester) async {
+      await startApp(tester);
+      await switchOn(tester);
+      await openTab(tester, 'Profile');
+      toBackground(tester);
+      await frames(tester);
+
+      await sayHeyChild(tester);
+      expect(voice.calls, ['listen']);
+      voice.finish('what is my name');
+      await frames(tester);
+      expect(backend.chatRequests.single['message'], 'what is my name');
+      expect(phone.listening, isTrue);
+    });
+
+    testWidgets('app in the background on a locked phone: the question waits until it is unlocked and on screen', (tester) async {
+      await startApp(tester);
+      await switchOn(tester);
+      toBackground(tester);
+      phone.lock = const DeviceLockState(locked: true, secure: true);
+      await frames(tester);
+
+      await sayHeyChild(tester);
+      expect(voice.calls, isEmpty, reason: 'nothing is heard or answered over the lock screen');
       expect(wake().state, WakeWordState.wakeWordDetected);
 
-      // The phone opens Child Assist (overlay start or full-screen notification).
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      // The user unlocks; the phone opens Child Assist (overlay start or full-screen notification).
+      phone.lock = DeviceLockState.unlocked;
+      toForeground(tester);
       await frames(tester);
       expect(voice.calls, ['listen']);
       voice.finish('where did I go today');
@@ -741,9 +920,9 @@ void main() {
     testWidgets('screen off and the app never shown: the wake phrase expires and listening resumes', (tester) async {
       await startApp(tester);
       await switchOn(tester);
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      toBackground(tester);
+      // The screen is off: the lock screen is showing.
+      phone.lock = const DeviceLockState(locked: true, secure: true);
       await sayHeyChild(tester);
       await tester.pump(const Duration(seconds: 16));
       await frames(tester);

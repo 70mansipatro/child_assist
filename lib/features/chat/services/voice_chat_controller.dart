@@ -37,6 +37,7 @@ class VoiceChatController extends ChangeNotifier {
         _explainPermission = explainPermission,
         _wakeWord = wakeWord {
     _tts.addListener(_ttsChanged);
+    _wakeWord?.addListener(_wakeChanged);
   }
 
   final VoiceInput _voice;
@@ -57,6 +58,9 @@ class VoiceChatController extends ChangeNotifier {
   final Future<bool> Function() _explainPermission;
 
   VoiceState _state = VoiceState.idle;
+
+  /// A question started by the wake phrase is in progress (not tap-to-talk).
+  bool _wakeQuestion = false;
   String _transcript = '';
   VoiceErrorKind? _error;
   String? _speakingMessageId;
@@ -122,7 +126,9 @@ class VoiceChatController extends ChangeNotifier {
       _log('listen failed: ${e.runtimeType}');
       return _fail(VoiceErrorKind.unknown);
     } finally {
-      unawaited(_wakeWord?.resumeAfter(WakeWordService.reasonTalking));
+      // One microphone owner at a time: the recogniser lets go before the wake word reopens it.
+      final wake = _wakeWord;
+      if (wake != null) unawaited(_voice.releaseMicrophone().whenComplete(() => wake.resumeAfter(WakeWordService.reasonTalking)));
     }
     if (_disposed) return;
 
@@ -177,38 +183,76 @@ class VoiceChatController extends ChangeNotifier {
 
     _error = null;
     _transcript = '';
+    _wakeQuestion = true;
+    try {
+      await _answerWakeQuestion(wake);
+    } finally {
+      _wakeQuestion = false;
+    }
+  }
+
+  Future<void> _answerWakeQuestion(WakeWordService wake) async {
     _set(VoiceState.listening);
     wake.commandListening();
+    wake.logStep('speech recognition starting');
     String? heard;
     try {
-      heard = await _voice.listen(onPartialResult: _heard).timeout(wakeQuestionTimeout, onTimeout: () async {
-        _log('wake word: question timed out');
+      heard = await _voice
+          .listen(onPartialResult: _heard, onReady: wake.questionReady)
+          .timeout(wakeQuestionTimeout, onTimeout: () async {
+        wake.logStep('speech recognition timed out');
         await _voice.cancelListening();
         return null;
       });
     } on VoiceInputException catch (e) {
-      _log('wake word: listen failed: ${e.kind.name}');
+      wake.logStep('speech recognition failed: ${e.kind.name}');
+      await _voice.releaseMicrophone();
       if (!_disposed) _fail(e.kind);
       return wake.commandEnded();
     } catch (e) {
-      _log('wake word: listen failed: ${e.runtimeType}');
+      wake.logStep('speech recognition failed: ${e.runtimeType}');
+      await _voice.releaseMicrophone();
       if (!_disposed) _fail(VoiceErrorKind.unknown);
       return wake.commandEnded();
     }
+    // The recogniser lets go of the microphone before anything else uses it.
+    await _voice.releaseMicrophone();
+    wake.logStep('speech recognition microphone released');
     if (_disposed) return wake.commandEnded();
 
     final question = stripWakePhrase(heard ?? '');
     if (question.isEmpty) {
-      // Only the wake phrase, or nothing: back to waiting for "Hey Child".
+      // Only the wake phrase, or nothing (or switched off meanwhile): back to waiting.
+      wake.logStep(heard == null ? 'question cancelled' : 'no question heard');
       _reset();
       return wake.commandEnded();
     }
     _transcript = '';
     _set(VoiceState.idle);
     wake.commandHeard();
-    _log('wake word: sending the question');
-    await send(question);
+    // Only the question's length: never what was said.
+    wake.logStep('question recognised (${question.length} chars); chat request started');
+    await stopSpeaking();
+    final reply = await _send(question);
+    wake.logStep(reply == null ? 'chat request ended without an answer' : 'chat request completed; answer shown');
+    if (!_disposed && reply != null && _tts.repliesEnabled && _state == VoiceState.idle && wake.enabled) {
+      // An answer is never read out over the lock screen unless the user allowed it.
+      if (await wake.mayRevealAnswer()) {
+        await speakMessage(reply);
+      } else {
+        wake.logStep('answer not read aloud: the phone is locked');
+      }
+    }
     wake.commandFinished();
+  }
+
+  /// Wake Word switched off (in Settings, from its notification, logout) during a wake question:
+  /// the recogniser's microphone closes and nothing more is said.
+  void _wakeChanged() {
+    final wake = _wakeWord;
+    if (!_wakeQuestion || wake == null || wake.state != WakeWordState.disabled) return;
+    unawaited(_voice.cancelListening());
+    unawaited(stopSpeaking());
   }
 
   /// Ends the utterance; what was heard so far is sent once.
@@ -337,6 +381,7 @@ class VoiceChatController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _tts.removeListener(_ttsChanged);
+    _wakeWord?.removeListener(_wakeChanged);
     // The services outlive this screen; only stop what this screen started.
     unawaited(_voice.cancelListening());
     unawaited(_tts.stop());

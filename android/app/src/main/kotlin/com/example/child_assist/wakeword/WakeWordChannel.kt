@@ -27,6 +27,8 @@ class WakeWordChannel(private val activity: Activity) {
     private val context: Context get() = activity.applicationContext
 
     fun register(engine: FlutterEngine) {
+        // Before the service exists too, so a deferred or refused start shows in the diagnostics.
+        WakeLog.init(context)
         MethodChannel(engine.dartExecutor.binaryMessenger, "child_assist/wake_word").setMethodCallHandler { call, result ->
             when (call.method) {
                 "start" -> result.success(start(call.argument<String>("owner"), call.argument<Map<*, *>>("tuning")))
@@ -40,6 +42,10 @@ class WakeWordChannel(private val activity: Activity) {
                 }
                 "resume" -> {
                     call.argument<String>("reason")?.let { WakeWordBridge.service?.resume(it) }
+                    result.success(null)
+                }
+                "playCue" -> {
+                    WakeWordService.playCue()
                     result.success(null)
                 }
                 "status" -> result.success(WakeWordBridge.status(context))
@@ -90,17 +96,31 @@ class WakeWordChannel(private val activity: Activity) {
         }
         WakeWordBridge.saveEnabled(context, owner, WakeWordTuning.from(tuning))
         WakeWordBridge.issue = null
-        return try {
-            WakeWordService.start(context)
-            "started"
-        } catch (e: IllegalStateException) {
-            // ForegroundServiceStartNotAllowedException (Android 12+) when not in the foreground.
+        if (!WakeWordBridge.activityVisible) {
+            // Android 14 only gives a foreground service the microphone if it is started while the
+            // app is on screen. Started a moment too early or too late (e.g. while the app is
+            // opening, or just after the user left it), Android starts it but refuses the
+            // microphone. Not started now; [onVisible] starts it as soon as the app is on screen.
+            WakeLog.d("start deferred until Child Assist is on screen")
             WakeWordBridge.issue = WakeWordService.ISSUE_START_BLOCKED
-            WakeWordService.ISSUE_START_BLOCKED
-        } catch (e: SecurityException) {
-            WakeWordBridge.issue = WakeWordService.ISSUE_START_BLOCKED
-            WakeWordService.ISSUE_START_BLOCKED
+            WakeWordBridge.emitStatus(context)
+            return WakeWordService.ISSUE_START_BLOCKED
         }
+        return startService()
+    }
+
+    private fun startService(): String = try {
+        WakeWordService.start(context)
+        "started"
+    } catch (e: IllegalStateException) {
+        // ForegroundServiceStartNotAllowedException (Android 12+) when not in the foreground.
+        WakeLog.w("start refused: ${e.javaClass.simpleName}")
+        WakeWordBridge.issue = WakeWordService.ISSUE_START_BLOCKED
+        WakeWordService.ISSUE_START_BLOCKED
+    } catch (e: SecurityException) {
+        WakeLog.w("start refused: ${e.javaClass.simpleName}")
+        WakeWordBridge.issue = WakeWordService.ISSUE_START_BLOCKED
+        WakeWordService.ISSUE_START_BLOCKED
     }
 
     private fun stop() {
@@ -178,6 +198,19 @@ class WakeWordChannel(private val activity: Activity) {
 
     fun onVisible(visible: Boolean) {
         WakeWordBridge.activityVisible = visible
+        // Switched on, but Android refused (or the app deferred) the start because Child Assist was
+        // not on screen at that moment: now it is, so the microphone may be used. Only for the
+        // account that switched it on (logout and switching account clear it first).
+        if (visible &&
+            WakeWordBridge.service == null &&
+            WakeWordBridge.issue == WakeWordService.ISSUE_START_BLOCKED &&
+            WakeWordBridge.isEnabled(context) &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        ) {
+            WakeLog.d("Child Assist on screen: starting the deferred wake word")
+            WakeWordBridge.issue = null
+            startService()
+        }
     }
 
     fun onDestroy() {

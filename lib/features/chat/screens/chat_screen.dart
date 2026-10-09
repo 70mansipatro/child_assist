@@ -172,12 +172,36 @@ class _ChatScreenState extends State<ChatScreen> {
     _takeWakeWord();
   }
 
-  /// "Hey Child" was heard: once Chat is on screen, listen for the question.
+  bool _checkingBackground = false;
+
+  /// "Hey Child" was heard: listen for the question with no tap.
+  ///
+  /// With Child Assist on screen, at once. With another app (or the Home screen) in front and the
+  /// phone unlocked, also at once, without Child Assist's screen: Android may refuse to bring the
+  /// app up (e.g. Xiaomi HyperOS drops background launches silently), and the question must not
+  /// depend on that. The microphone service's notification stays visible meanwhile. With the
+  /// phone locked, it waits until the user unlocks and Child Assist comes up.
   void _takeWakeWord() {
     final wake = widget.wakeWordService;
     if (wake == null || !mounted || !widget.active || !wake.hasPendingActivation) return;
     final lifecycle = WidgetsBinding.instance.lifecycleState;
-    if (lifecycle != null && lifecycle != AppLifecycleState.resumed) return;
+    if (lifecycle == null || lifecycle == AppLifecycleState.resumed) return _startWakeQuestion(wake);
+    if (_checkingBackground) return;
+    _checkingBackground = true;
+    wake.mayListenInBackground().then((allowed) {
+      _checkingBackground = false;
+      if (!mounted || !widget.active || !wake.hasPendingActivation) return;
+      final now = WidgetsBinding.instance.lifecycleState;
+      if (now == AppLifecycleState.resumed || allowed) {
+        if (now != AppLifecycleState.resumed) wake.logStep('question taken with Child Assist in the background');
+        _startWakeQuestion(wake);
+      } else {
+        wake.logStep('phone locked: question waits for unlock');
+      }
+    });
+  }
+
+  void _startWakeQuestion(WakeWordService wake) {
     if (!wake.takeActivation()) return;
     _focus.unfocus();
     _voice.listenAfterWakeWord();

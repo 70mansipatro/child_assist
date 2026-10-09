@@ -130,6 +130,9 @@ abstract class WakeWordPlatform {
   /// Keeps the screen from turning off during a question (a window flag, not a wake lock).
   Future<void> keepScreenOn(bool on);
 
+  /// A short tone: the speech recogniser is listening, the question can be asked now.
+  Future<void> playCue();
+
   /// Asks the user to unlock the phone. True once unlocked.
   Future<bool> requestUnlock();
 
@@ -226,6 +229,9 @@ class MethodChannelWakeWordPlatform implements WakeWordPlatform {
 
   @override
   Future<void> keepScreenOn(bool on) => _call<void>('keepScreenOn', {'on': on});
+
+  @override
+  Future<void> playCue() => _call<void>('playCue');
 
   @override
   Future<bool> requestUnlock() async => await _call<bool>('requestUnlock') ?? false;

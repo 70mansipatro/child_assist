@@ -38,6 +38,7 @@ class WakeWordService extends ChangeNotifier {
     WakeWordStore? store,
     this.tuning = const WakeWordTuning(),
     this.speechTail = const Duration(milliseconds: 700),
+    this.micHandoffCooldown = const Duration(milliseconds: 300),
     this.activationTimeout = const Duration(seconds: 15),
     this.lockScreenGrace = const Duration(seconds: 15),
   })  : _auth = authService,
@@ -65,6 +66,10 @@ class WakeWordService extends ChangeNotifier {
   /// After a reply is read aloud, the wake word waits this long before listening again, so the
   /// tail of Child Assist's own voice is not heard.
   final Duration speechTail;
+
+  /// After the phone's speech recogniser has released the microphone, the wake word waits this
+  /// long before opening it again, so the two never record at the same time.
+  final Duration micHandoffCooldown;
 
   /// How long a wake phrase waits for Child Assist to come on screen and take it.
   final Duration activationTimeout;
@@ -103,6 +108,7 @@ class WakeWordService extends ChangeNotifier {
   bool _finishWhenSilent = false;
   bool _speaking = false;
   Timer? _speechTailTimer;
+  Timer? _handoffTimer;
   bool _lockedSession = false;
   Timer? _lockTimer;
 
@@ -171,7 +177,8 @@ class WakeWordService extends ChangeNotifier {
           WakeWordIssue.call => 'Paused during the call.',
           WakeWordIssue.microphoneBusy => 'Paused while another app uses the microphone.',
           WakeWordIssue.startBlocked =>
-            'Paused. Android stopped voice activation in the background; it starts again now that Child Assist is open.',
+            'Paused. Android only lets Wake Word start while Child Assist is open on an unlocked screen; '
+                'it starts as soon as it is.',
           _ => 'Paused while you talk to Child Assist.',
         };
       case WakeWordState.error:
@@ -326,6 +333,22 @@ class WakeWordService extends ChangeNotifier {
     return unlocked && generation == _generation;
   }
 
+  /// Whether the question may be taken while Child Assist is not on screen (another app or the
+  /// Home screen is). Only on an unlocked phone: with the lock screen showing, nothing is asked or
+  /// answered until the user unlocks and Child Assist comes up.
+  Future<bool> mayListenInBackground() async {
+    final lock = await _platform.lockState();
+    return !lock.locked;
+  }
+
+  /// Whether an answer may be read aloud right now: never over the lock screen unless the user
+  /// allowed answers there. (The phone may have locked while the answer was on its way.)
+  Future<bool> mayRevealAnswer() async {
+    if (_lockScreenAnswers || _lockedSession) return true;
+    final lock = await _platform.lockState();
+    return !lock.locked;
+  }
+
   /// The recogniser started listening for the question.
   void commandListening() {
     if (!_machine.fire(WakeWordEvent.commandListening)) return;
@@ -333,6 +356,18 @@ class WakeWordService extends ChangeNotifier {
     unawaited(_platform.suspend(reasonInteraction));
     _notify();
   }
+
+  /// The recogniser is really receiving audio: the cue tells the user to ask now. Played only now,
+  /// not when the phrase is heard, because the recogniser needs about a second to start and
+  /// words said before that are lost.
+  void questionReady() {
+    if (state != WakeWordState.listeningForCommand) return;
+    _log('question recogniser receiving audio; cue');
+    unawaited(_platform.playCue());
+  }
+
+  /// Fixed step names for the diagnostics log, never what was said or answered.
+  void logStep(String step) => _log(step);
 
   /// A question was heard and is being sent.
   void commandHeard() {
@@ -441,8 +476,11 @@ class WakeWordService extends ChangeNotifier {
       _cancelInteraction();
       return _notify();
     }
-    if (_machine.inInteraction) return;
+    // "Turn off" in the notification during a question ends the question too: the controller
+    // sees the switch go off and closes the recogniser's microphone.
+    if (_machine.inInteraction && (status.running || status.enabled)) return;
     if (!status.running) {
+      if (_machine.inInteraction) _cancelInteraction();
       if (state == WakeWordState.starting) return;
       if (!status.enabled) {
         // Switched off from its notification ("Turn off").
@@ -504,7 +542,19 @@ class WakeWordService extends ChangeNotifier {
     _activationTimer?.cancel();
     _machine.fire(event);
     unawaited(_platform.keepScreenOn(false));
-    unawaited(_platform.resume(reasonInteraction));
+    _handoffTimer?.cancel();
+    if (event == WakeWordEvent.commandEnded && micHandoffCooldown > Duration.zero) {
+      // The recogniser has only just let go of the microphone; reopen it shortly after.
+      final generation = _generation;
+      _handoffTimer = Timer(micHandoffCooldown, () {
+        if (generation != _generation) return;
+        _log('microphone back to the wake word');
+        unawaited(_platform.resume(reasonInteraction));
+      });
+    } else {
+      _log('microphone back to the wake word');
+      unawaited(_platform.resume(reasonInteraction));
+    }
     if (_lockedSession) {
       _lockTimer?.cancel();
       _lockTimer = Timer(lockScreenGrace, () => unawaited(_endLockedSession()));
@@ -545,6 +595,7 @@ class WakeWordService extends ChangeNotifier {
     if (speaking == _speaking) return;
     _speaking = speaking;
     _speechTailTimer?.cancel();
+    if (_enabled) _log(speaking ? 'tts started; wake word microphone closed' : 'tts finished');
     if (speaking) {
       if (_enabled && isSupported) unawaited(_platform.suspend(reasonSpeaking));
       if (_machine.fire(WakeWordEvent.replySpeaking)) _notify();
@@ -571,6 +622,7 @@ class WakeWordService extends ChangeNotifier {
   Future<void> _stopEverything() async {
     _cancelInteraction();
     _speechTailTimer?.cancel();
+    _handoffTimer?.cancel();
     _machine.reset();
     // Not awaited: nothing depends on it, and it may complete in the listener's zone.
     unawaited(_events?.cancel());
@@ -611,6 +663,7 @@ class WakeWordService extends ChangeNotifier {
     _generation++;
     _cancelInteraction();
     _speechTailTimer?.cancel();
+    _handoffTimer?.cancel();
     _lockTimer?.cancel();
     unawaited(_events?.cancel());
     _events = null;
@@ -719,6 +772,7 @@ class WakeWordService extends ChangeNotifier {
     _tts.removeListener(_onSpeechChanged);
     _activationTimer?.cancel();
     _speechTailTimer?.cancel();
+    _handoffTimer?.cancel();
     _lockTimer?.cancel();
     unawaited(_events?.cancel());
     super.dispose();

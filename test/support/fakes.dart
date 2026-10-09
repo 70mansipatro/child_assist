@@ -1815,19 +1815,46 @@ class FakeVoiceInput implements VoiceInput {
     return available && initializes;
   }
 
+  VoidCallback? _onReady;
+
+  /// Whether listen reports the microphone open by itself (like the phone, once sound levels
+  /// arrive). Off: a test opens it with [ready], e.g. to speak before the recogniser listens.
+  bool readyOnListen = true;
+
   @override
-  Future<String?> listen({ValueChanged<String>? onPartialResult, String? localeId}) {
+  Future<String?> listen({ValueChanged<String>? onPartialResult, VoidCallback? onReady, String? localeId}) {
     calls.add('listen');
     if (!available || !initializes) return Future.error(const VoiceInputException(VoiceErrorKind.unavailable));
     _heard = '';
     _onPartial = onPartialResult;
-    return (_pending = Completer<String?>()).future;
+    _onReady = onReady;
+    final future = (_pending = Completer<String?>()).future;
+    if (readyOnListen) scheduleMicrotask(ready);
+    return future;
+  }
+
+  /// The recogniser's microphone is open (the first sound levels arrive).
+  void ready() {
+    final onReady = _onReady;
+    _onReady = null;
+    if (_pending != null) onReady?.call();
   }
 
   /// The user is speaking: a partial result.
   void hear(String words) {
+    ready();
     _heard = words;
     _onPartial?.call(words);
+  }
+
+  /// Times the microphone was released after an utterance.
+  int releases = 0;
+
+  @override
+  Future<void> releaseMicrophone() async {
+    if (_pending != null) return;
+    calls.add('release');
+    releases++;
   }
 
   /// The recogniser's final result.

@@ -102,6 +102,15 @@ class FakeWakeWordPlatform implements WakeWordPlatform {
   @override
   Future<void> keepScreenOn(bool on) async => screenKeptOn = on;
 
+  /// Listening cues played (one per question, once the recogniser really listens).
+  int cues = 0;
+
+  @override
+  Future<void> playCue() async {
+    calls.add('cue');
+    cues++;
+  }
+
   @override
   Future<bool> requestUnlock() async {
     calls.add('requestUnlock');

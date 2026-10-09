@@ -100,7 +100,14 @@ class _AppShellState extends State<AppShell> {
   void _onWakeWord() {
     if (!mounted) return;
     if (_wakeWord.lockedSession != _lockedSession) setState(() => _lockedSession = _wakeWord.lockedSession);
-    if (_wakeWord.hasPendingActivation && (_index != AppShell.chatTab || _pushed > 0)) _go(AppDestination.chat);
+    if (_wakeWord.hasPendingActivation && (_index != AppShell.chatTab || _pushed > 0)) {
+      _go(AppDestination.chat);
+      // Not on screen, Flutter draws no frames, so Chat would only be built (and take the
+      // question) once the app is opened. One frame builds it now.
+      if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+        WidgetsBinding.instance.scheduleForcedFrame();
+      }
+    }
   }
 
   void _reportVisible() {

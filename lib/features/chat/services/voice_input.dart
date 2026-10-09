@@ -32,13 +32,20 @@ abstract class VoiceInput {
   /// Returns an empty string if nothing was heard, and null if [cancelListening] was called.
   /// [onPartialResult] receives the words recognised so far while the user is speaking.
   /// Throws [VoiceInputException] when recognition fails. Completes exactly once per call.
-  Future<String?> listen({ValueChanged<String>? onPartialResult, String? localeId});
+  /// [onReady] is called once, when the recogniser is really receiving audio (words spoken
+  /// before that are not heard).
+  Future<String?> listen({ValueChanged<String>? onPartialResult, VoidCallback? onReady, String? localeId});
 
   /// Stops listening and lets [listen] complete with what was recognised so far.
   Future<void> stopListening();
 
   /// Stops listening and discards the utterance; [listen] completes with null.
   Future<void> cancelListening();
+
+  /// After [listen] completed: makes sure the device recogniser has closed the microphone. It can
+  /// keep it open for a moment after reporting the end of an utterance, so another microphone
+  /// user (the wake word) must call this before opening it again.
+  Future<void> releaseMicrophone();
 
   /// The languages the device can recognise, for a future language picker.
   Future<List<VoiceLocale>> locales();
@@ -110,7 +117,7 @@ class UnavailableVoiceInput implements VoiceInput {
   Future<bool> initialize() async => false;
 
   @override
-  Future<String?> listen({ValueChanged<String>? onPartialResult, String? localeId}) async =>
+  Future<String?> listen({ValueChanged<String>? onPartialResult, VoidCallback? onReady, String? localeId}) async =>
       throw const VoiceInputException(VoiceErrorKind.unavailable);
 
   @override
@@ -118,6 +125,9 @@ class UnavailableVoiceInput implements VoiceInput {
 
   @override
   Future<void> cancelListening() async {}
+
+  @override
+  Future<void> releaseMicrophone() async {}
 
   @override
   Future<List<VoiceLocale>> locales() async => const [];
@@ -164,6 +174,7 @@ class SpeechToTextVoiceInput implements VoiceInput {
   Completer<String?>? _pending;
   String _recognized = '';
   ValueChanged<String>? _onPartial;
+  VoidCallback? _onReady;
 
   // Evidence that this utterance really reached the microphone: the recogniser reported
   // "listening" and then sound levels or words. Without it, a "no match" means the recogniser
@@ -209,13 +220,14 @@ class SpeechToTextVoiceInput implements VoiceInput {
   }
 
   @override
-  Future<String?> listen({ValueChanged<String>? onPartialResult, String? localeId}) async {
+  Future<String?> listen({ValueChanged<String>? onPartialResult, VoidCallback? onReady, String? localeId}) async {
     if (_pending != null) throw const VoiceInputException(VoiceErrorKind.busy);
     if (!await initialize()) throw const VoiceInputException(VoiceErrorKind.unavailable);
 
     final pending = _pending = Completer<String?>();
     _recognized = '';
     _onPartial = onPartialResult;
+    _onReady = onReady;
     _started = false;
     _heardAudio = false;
     try {
@@ -273,6 +285,20 @@ class SpeechToTextVoiceInput implements VoiceInput {
   }
 
   @override
+  Future<void> releaseMicrophone() async {
+    // Never used, or still listening (the utterance owns it): nothing to release.
+    if (_speechInstance == null || !_initialized || _pending != null) return;
+    try {
+      // After "done" the phone's speech service can keep recording for about a second (seen on
+      // Android 14 as a late "no match" error). Cancelling ends that session now.
+      await _speech.cancel();
+      _log('microphone released');
+    } catch (e) {
+      _log('release threw ${e.runtimeType}');
+    }
+  }
+
+  @override
   Future<List<VoiceLocale>> locales() async {
     if (!await initialize()) return const [];
     try {
@@ -288,7 +314,7 @@ class SpeechToTextVoiceInput implements VoiceInput {
   void _handleResult(SpeechRecognitionResult result) {
     if (_pending == null) return;
     _recognized = result.recognizedWords;
-    if (_recognized.isNotEmpty) _heardAudio = true;
+    if (_recognized.isNotEmpty) _ready();
     if (result.finalResult) {
       _log('final: ${_private(_recognized)}');
       _complete(_recognized);
@@ -299,7 +325,17 @@ class SpeechToTextVoiceInput implements VoiceInput {
   }
 
   void _handleSoundLevel(double level) {
-    if (_pending != null) _heardAudio = true;
+    if (_pending != null) _ready();
+  }
+
+  /// Sound levels (or words) only arrive once the recogniser's microphone is really open.
+  void _ready() {
+    _heardAudio = true;
+    final onReady = _onReady;
+    if (onReady == null) return;
+    _onReady = null;
+    _log('recogniser receiving audio');
+    onReady();
   }
 
   void _handleStatus(String status) {
@@ -365,6 +401,7 @@ class SpeechToTextVoiceInput implements VoiceInput {
     if (pending == null || pending.isCompleted) return;
     _pending = null;
     _onPartial = null;
+    _onReady = null;
     pending.complete(text?.trim());
   }
 
@@ -373,14 +410,15 @@ class SpeechToTextVoiceInput implements VoiceInput {
     if (pending == null || pending.isCompleted) return;
     _pending = null;
     _onPartial = null;
+    _onReady = null;
     pending.completeError(error);
   }
 }
 
-/// Development-only voice logs: never tokens or personal data, and the recognised words only
-/// in debug builds.
+/// Development-only voice logs: never tokens, personal data or what the user said.
 void _log(String message) {
   if (kDebugMode) debugPrint('[Voice] $message');
 }
 
-String _private(String words) => kDebugMode ? '"$words"' : '(${words.length} chars)';
+/// What was said stays out of logs, even in debug builds: only its length.
+String _private(String words) => '(${words.length} chars)';
