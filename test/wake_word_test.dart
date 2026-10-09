@@ -879,7 +879,7 @@ void main() {
       await switchOn(tester);
       expect(phone.sayWakePhrase(keyword: 'HI_CHILD'), isTrue);
       await frames(tester);
-      expect(find.text('Listening for your question...'), findsOneWidget, reason: 'the voice panel shows the state');
+      expect(find.text("I'm listening…"), findsOneWidget, reason: 'the waveform at the camera shows the state');
 
       voice.finish('Hi Child, where did I travel today?');
       await frames(tester);
@@ -889,27 +889,27 @@ void main() {
       voice.finish('Hey Child, what is my name?');
       await frames(tester);
       expect(backend.chatRequests.last['message'], 'what is my name?');
-      expect(find.text('Listening for your question...'), findsNothing);
+      expect(find.text("I'm listening…"), findsNothing);
       expect(find.text('Listening for “Hey Child”'), findsOneWidget, reason: 'Chat shows it is waiting again');
     });
 
-    testWidgets('the panel follows the question: listening, processing, answer', (tester) async {
+    testWidgets('the waveform follows the question: listening, thinking, answering', (tester) async {
       await startApp(tester);
       await switchOn(tester);
       tts.repliesEnabled = true;
       await sayHeyChild(tester);
-      expect(find.text('Listening for your question...'), findsOneWidget);
+      expect(find.text("I'm listening…"), findsOneWidget);
       final answer = backend.chatPending = Completer<void>();
       voice.finish('what time is it');
       await frames(tester);
-      expect(find.text('Processing your question...'), findsOneWidget);
+      expect(find.text('Thinking…'), findsOneWidget);
       answer.complete();
       await frames(tester);
-      expect(find.text('Here is your answer...'), findsOneWidget);
+      expect(find.text('Answering…'), findsOneWidget);
       tts.finishSpeaking();
       await tester.pump(const Duration(milliseconds: 800));
       await frames(tester);
-      expect(find.text('Here is your answer...'), findsNothing);
+      expect(find.text('Answering…'), findsNothing);
     });
 
     testWidgets('Home screen, phone unlocked: the question is heard and answered with no tap and no app screen', (tester) async {
@@ -1041,7 +1041,9 @@ void main() {
       expect(wake().state, WakeWordState.error);
 
       await openVoiceAssistant(tester);
-      expect(await seen(tester, find.text("Wake Word couldn't start on this phone.")), findsOneWidget);
+      // Also shown briefly by the waveform at the camera; Settings keeps explaining it.
+      final status = find.descendant(of: find.byType(VoiceAssistantScreen), matching: find.text("Wake Word couldn't start on this phone."));
+      expect(await seen(tester, status), findsOneWidget);
       await tapVisible(tester, find.widgetWithText(FilledButton, 'Try again'));
       await frames(tester);
       expect(wake().state, WakeWordState.listeningForWakeWord);

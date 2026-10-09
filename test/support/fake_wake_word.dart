@@ -133,6 +133,19 @@ class FakeWakeWordPlatform implements WakeWordPlatform {
     return true;
   }
 
+  /// What the waveform outside the app shows ("listening I'm listening…"), or null when hidden.
+  String? systemOverlay;
+
+  @override
+  Future<bool> showSystemOverlay({required String phase, required String title, String? hint}) async {
+    if (!backgroundOpenAllowed) return false;
+    systemOverlay = '$phase $title';
+    return true;
+  }
+
+  @override
+  Future<void> hideSystemOverlay() async => systemOverlay = null;
+
   @override
   Future<bool> openFullScreenIntentSettings() async {
     calls.add('openFullScreenIntentSettings');

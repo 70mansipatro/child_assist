@@ -1828,6 +1828,7 @@ class FakeVoiceInput implements VoiceInput {
   Future<String?> listen({
     ValueChanged<String>? onPartialResult,
     VoidCallback? onReady,
+    ValueChanged<double>? onSoundLevel,
     Duration? pauseFor,
     String? localeId,
   }) {
@@ -1837,6 +1838,7 @@ class FakeVoiceInput implements VoiceInput {
     _heard = '';
     _onPartial = onPartialResult;
     _onReady = onReady;
+    _onSoundLevel = onSoundLevel;
     final future = (_pending = Completer<String?>()).future;
     if (readyOnListen) scheduleMicrotask(ready);
     return future;
@@ -1847,6 +1849,14 @@ class FakeVoiceInput implements VoiceInput {
     final onReady = _onReady;
     _onReady = null;
     if (_pending != null) onReady?.call();
+  }
+
+  ValueChanged<double>? _onSoundLevel;
+
+  /// The recogniser reports how loud the microphone is (0 to 1), as the phone does while listening.
+  void soundLevel(double level) {
+    ready();
+    if (_pending != null) _onSoundLevel?.call(level);
   }
 
   /// The user is speaking: a partial result.

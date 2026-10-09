@@ -148,6 +148,12 @@ abstract class WakeWordPlatform {
   /// is in use (otherwise a heads-up notification is shown).
   Future<bool> canOpenFromBackground();
   Future<bool> openBackgroundOpenSettings();
+
+  /// The waveform above the Home screen, other apps (and the lock screen where Android allows it)
+  /// while Child Assist is not on screen. Needs "Display over other apps"; false if not shown.
+  /// Only the state is shown ([title], [hint]), never what was asked or answered.
+  Future<bool> showSystemOverlay({required String phase, required String title, String? hint});
+  Future<void> hideSystemOverlay();
 }
 
 /// The Android implementation, over "child_assist/wake_word". Never throws: a missing or failing
@@ -251,4 +257,11 @@ class MethodChannelWakeWordPlatform implements WakeWordPlatform {
 
   @override
   Future<bool> openBackgroundOpenSettings() async => await _call<bool>('openBackgroundOpenSettings') ?? false;
+
+  @override
+  Future<bool> showSystemOverlay({required String phase, required String title, String? hint}) async =>
+      await _call<bool>('showOverlay', {'phase': phase, 'title': title, 'hint': hint}) ?? false;
+
+  @override
+  Future<void> hideSystemOverlay() => _call<void>('hideOverlay');
 }

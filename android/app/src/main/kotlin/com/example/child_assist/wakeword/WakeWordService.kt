@@ -121,6 +121,7 @@ class WakeWordService : Service() {
         detector?.release()
         detector = null
         stopWatching()
+        WakeOverlay.hide()
         if (WakeWordBridge.service === this) WakeWordBridge.service = null
         WakeWordBridge.emitStatus(this)
         super.onDestroy()
@@ -295,6 +296,13 @@ class WakeWordService : Service() {
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
             } catch (e: RuntimeException) {
                 WakeLog.w("could not open the app: ${e.javaClass.simpleName}")
+            }
+            // Unlocked: the question is answered without the app's screen, and the waveform overlay
+            // (WakeOverlay) shows that Child Assist is listening, so a heads-up notification would
+            // only cover it. Locked, the notification below is still how the app comes up.
+            if (!locked && WakeWordBridge.events != null) {
+                WakeLog.d("unlocked: the waveform overlay shows the question, no notification")
+                return
             }
         }
         val open = PendingIntent.getActivity(this, 1, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)

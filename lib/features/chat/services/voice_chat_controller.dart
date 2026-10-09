@@ -176,15 +176,16 @@ class VoiceChatController extends ChangeNotifier {
     await stopSpeaking();
     if (!_voice.isAvailable) {
       _fail(VoiceErrorKind.unavailable);
-      return wake.commandEnded();
+      return wake.commandEnded(problem: VoiceErrorKind.unavailable.message);
     }
     final permission = await _permissions.microphoneStatus();
     if (_disposed) return wake.commandEnded();
     if (!permission.isUsable) {
-      _fail(permission == PermissionState.permanentlyDenied || permission == PermissionState.restricted
+      final kind = permission == PermissionState.permanentlyDenied || permission == PermissionState.restricted
           ? VoiceErrorKind.permissionBlocked
-          : VoiceErrorKind.permissionDenied);
-      return wake.commandEnded();
+          : VoiceErrorKind.permissionDenied;
+      _fail(kind);
+      return wake.commandEnded(problem: kind.message);
     }
     if (!await wake.prepareForQuestion() || _disposed) {
       if (!_disposed) _reset();
@@ -226,7 +227,12 @@ class VoiceChatController extends ChangeNotifier {
 
     try {
       heard = await _voice
-          .listen(onPartialResult: partial, onReady: wake.questionReady, pauseFor: wakeQuestionStartWindow)
+          .listen(
+            onPartialResult: partial,
+            onReady: wake.questionReady,
+            onSoundLevel: wake.questionSoundLevel,
+            pauseFor: wakeQuestionStartWindow,
+          )
           .timeout(wakeQuestionTimeout, onTimeout: () async {
         wake.logStep('speech recognition timed out');
         await _voice.cancelListening();
@@ -237,13 +243,13 @@ class VoiceChatController extends ChangeNotifier {
       wake.logStep('speech recognition failed: ${e.kind.name}');
       await _voice.releaseMicrophone();
       if (!_disposed) _fail(e.kind);
-      return wake.commandEnded();
+      return wake.commandEnded(problem: e.kind.message);
     } catch (e) {
       endOfQuestion?.cancel();
       wake.logStep('speech recognition failed: ${e.runtimeType}');
       await _voice.releaseMicrophone();
       if (!_disposed) _fail(VoiceErrorKind.unknown);
-      return wake.commandEnded();
+      return wake.commandEnded(problem: VoiceErrorKind.unknown.message);
     }
     endOfQuestion?.cancel();
     // The recogniser lets go of the microphone before anything else uses it.
@@ -279,8 +285,11 @@ class VoiceChatController extends ChangeNotifier {
         wake.logStep('answer not read aloud: the phone is locked');
       }
     }
-    wake.commandFinished();
+    wake.commandFinished(problem: reply == null ? noAnswerMessage : null);
   }
+
+  /// Shown briefly after a hands-free question that got no answer (e.g. no connection).
+  static const noAnswerMessage = "I couldn't get an answer right now. Say “Hey Child” to try again.";
 
   /// Wake Word switched off (in Settings, from its notification, logout) during a wake question:
   /// the recogniser's microphone closes and nothing more is said.

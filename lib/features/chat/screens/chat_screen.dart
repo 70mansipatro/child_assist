@@ -24,7 +24,7 @@ import '../widgets/chat_input.dart';
 import '../widgets/chat_message_bubble.dart';
 import '../widgets/tool_result_cards.dart';
 import '../widgets/typing_indicator.dart';
-import '../widgets/wake_word_panel.dart';
+import '../../voice_assistant/widgets/wake_word_overlay.dart';
 import 'chat_history_screen.dart';
 
 /// Chat with Child Assist. All AI work happens on the server; this screen only sends text,
@@ -345,7 +345,9 @@ class _ChatScreenState extends State<ChatScreen> {
         builder: (context, _) => Column(
           children: [
             if (_lockedSession) _buildLockedBanner(),
-            if (_wakeInteraction case final state?) WakeWordPanel(state: state, heard: _voice.transcript),
+            // The question itself is shown by the waveform at the camera (WakeWordNotchOverlay).
+            if (widget.wakeWordService case final wake?)
+              WakeWordIdleHint(wakeWord: wake, padding: const EdgeInsets.fromLTRB(16, 10, 16, 0)),
             Expanded(child: _buildBody(context)),
             if (_session.error != null) _buildError(),
             ?_buildVoiceStatus(context),
@@ -364,12 +366,6 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   bool get _lockedSession => widget.wakeWordService?.lockedSession ?? false;
-
-  /// The hands-free question in progress, if any.
-  WakeWordState? get _wakeInteraction {
-    final state = widget.wakeWordService?.state;
-    return state != null && WakeWordStateMachine.isInteraction(state) ? state : null;
-  }
 
   /// Shown while Child Assist answers above the lock screen.
   Widget _buildLockedBanner() {

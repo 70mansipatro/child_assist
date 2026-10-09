@@ -153,6 +153,17 @@ class WakeWordService extends ChangeNotifier {
   /// of the app needs [unlock].
   bool get lockedSession => _lockedSession;
 
+  /// How loud the question is (0 to 1) while the phone's recogniser listens to it, from the levels
+  /// it really measures. Null whenever no level is known (any other state, or none reported yet).
+  /// Separate from [addListener], so level updates never rebuild what only needs [state].
+  ValueListenable<double?> get questionLevel => _questionLevel;
+  final _questionLevel = ValueNotifier<double?>(null);
+
+  /// Why the last question failed (no answer, recogniser error), so it can be shown briefly. A new
+  /// object for each failure; listening for the wake phrase resumes regardless.
+  WakeWordProblem? get questionProblem => _questionProblem;
+  WakeWordProblem? _questionProblem;
+
   /// One line for Settings, true to what the phone reports.
   String get statusMessage {
     if (!isSupported) return 'Wake Word is not available on this device.';
@@ -285,6 +296,14 @@ class WakeWordService extends ChangeNotifier {
   /// "Display over other apps", so the wake phrase can open Child Assist while another app is used.
   Future<bool> openBackgroundOpenSettings() => _platform.openBackgroundOpenSettings();
 
+  /// The waveform outside the app (see [WakeWordPlatform.showSystemOverlay]). Never throws.
+  Future<bool> showSystemOverlay({required String phase, required String title, String? hint}) async =>
+      isSupported && await _platform.showSystemOverlay(phase: phase, title: title, hint: hint);
+
+  Future<void> hideSystemOverlay() async {
+    if (isSupported) await _platform.hideSystemOverlay();
+  }
+
   /// Without "Display over other apps", a wake phrase heard while another app is on screen shows a
   /// notification to tap instead of opening Child Assist by itself.
   bool get backgroundOpenBlocked => _backgroundOpenBlocked;
@@ -368,6 +387,12 @@ class WakeWordService extends ChangeNotifier {
     unawaited(_platform.playCue());
   }
 
+  /// The recogniser's measured loudness while it listens to the question (see [questionLevel]).
+  void questionSoundLevel(double level) {
+    if (state != WakeWordState.listeningForCommand) return;
+    _questionLevel.value = level.clamp(0.0, 1.0);
+  }
+
   /// Fixed step names for the diagnostics log, never what was said or answered.
   void logStep(String step) => _log(step);
 
@@ -378,9 +403,10 @@ class WakeWordService extends ChangeNotifier {
     _notify();
   }
 
-  /// The answer arrived (or failed). Listening for the wake phrase resumes once it has been read
-  /// aloud, if it is being read.
-  void commandFinished() {
+  /// The answer arrived (or failed, with [problem] for the user). Listening for the wake phrase
+  /// resumes once it has been read aloud, if it is being read.
+  void commandFinished({String? problem}) {
+    if (problem != null) _questionProblem = WakeWordProblem(problem);
     if (_tts.isSpeaking) {
       _finishWhenSilent = true;
       _machine.fire(WakeWordEvent.replySpeaking);
@@ -389,8 +415,12 @@ class WakeWordService extends ChangeNotifier {
     _endInteraction(WakeWordEvent.replyDone);
   }
 
-  /// Nothing was asked after all (silence, timeout, cancelled, failed).
-  void commandEnded() => _endInteraction(WakeWordEvent.commandEnded);
+  /// Nothing was asked after all (silence, timeout, cancelled, or failed with [problem] for the
+  /// user).
+  void commandEnded({String? problem}) {
+    if (problem != null) _questionProblem = WakeWordProblem(problem);
+    _endInteraction(WakeWordEvent.commandEnded);
+  }
 
   /// "Unlock" during a lock-screen question: the rest of the app needs the phone unlocked.
   Future<bool> unlock() async {
@@ -540,6 +570,7 @@ class WakeWordService extends ChangeNotifier {
     // Heard again while a question is in progress: one question at a time.
     if (!_machine.fire(WakeWordEvent.detected)) return;
     _issue = null;
+    _questionProblem = null;
     _inlineQuestion = question.trim();
     _pendingActivation = true;
     _activationTimer?.cancel();
@@ -688,6 +719,7 @@ class WakeWordService extends ChangeNotifier {
     _enabled = false;
     _restoring = false;
     _issue = null;
+    _questionProblem = null;
     _lockScreenAnswers = false;
     _notificationsBlocked = false;
     _fullScreenBlocked = false;
@@ -764,6 +796,7 @@ class WakeWordService extends ChangeNotifier {
 
   void _notify() {
     if (_disposed) return;
+    if (state != WakeWordState.listeningForCommand) _questionLevel.value = null;
     if (state != _loggedState) {
       _loggedState = state;
       _log(switch (state) {
@@ -791,8 +824,16 @@ class WakeWordService extends ChangeNotifier {
     _handoffTimer?.cancel();
     _lockTimer?.cancel();
     unawaited(_events?.cancel());
+    _questionLevel.dispose();
     super.dispose();
   }
+}
+
+/// A question that failed, with what to tell the user.
+class WakeWordProblem {
+  WakeWordProblem(this.message);
+
+  final String message;
 }
 
 /// Debug builds only. Fixed state names and issue kinds; never what the user said, tokens or ids.

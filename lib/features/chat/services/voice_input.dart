@@ -34,9 +34,12 @@ abstract class VoiceInput {
   /// Throws [VoiceInputException] when recognition fails. Completes exactly once per call.
   /// [onReady] is called once, when the recogniser is really receiving audio (words spoken
   /// before that are not heard). [pauseFor] overrides how long a silence ends the utterance.
+  /// [onSoundLevel] receives the microphone's real loudness while listening, from 0 (silence) to
+  /// 1 (loud); it is never called when the recogniser reports no levels.
   Future<String?> listen({
     ValueChanged<String>? onPartialResult,
     VoidCallback? onReady,
+    ValueChanged<double>? onSoundLevel,
     Duration? pauseFor,
     String? localeId,
   });
@@ -125,6 +128,7 @@ class UnavailableVoiceInput implements VoiceInput {
   Future<String?> listen({
     ValueChanged<String>? onPartialResult,
     VoidCallback? onReady,
+    ValueChanged<double>? onSoundLevel,
     Duration? pauseFor,
     String? localeId,
   }) async =>
@@ -185,6 +189,7 @@ class SpeechToTextVoiceInput implements VoiceInput {
   String _recognized = '';
   ValueChanged<String>? _onPartial;
   VoidCallback? _onReady;
+  ValueChanged<double>? _onSoundLevel;
 
   // Evidence that this utterance really reached the microphone: the recogniser reported
   // "listening" and then sound levels or words. Without it, a "no match" means the recogniser
@@ -233,6 +238,7 @@ class SpeechToTextVoiceInput implements VoiceInput {
   Future<String?> listen({
     ValueChanged<String>? onPartialResult,
     VoidCallback? onReady,
+    ValueChanged<double>? onSoundLevel,
     Duration? pauseFor,
     String? localeId,
   }) async {
@@ -243,6 +249,7 @@ class SpeechToTextVoiceInput implements VoiceInput {
     _recognized = '';
     _onPartial = onPartialResult;
     _onReady = onReady;
+    _onSoundLevel = onSoundLevel;
     _started = false;
     _heardAudio = false;
     try {
@@ -340,8 +347,14 @@ class SpeechToTextVoiceInput implements VoiceInput {
   }
 
   void _handleSoundLevel(double level) {
-    if (_pending != null) _ready();
+    if (_pending == null) return;
+    _ready();
+    _onSoundLevel?.call(normalizeSoundLevel(level));
   }
+
+  /// Android's recogniser reports loudness in dB, from about -2 (silence) to 10 (loud speech).
+  @visibleForTesting
+  static double normalizeSoundLevel(double rmsDb) => ((rmsDb + 2) / 12).clamp(0.0, 1.0);
 
   /// Sound levels (or words) only arrive once the recogniser's microphone is really open.
   void _ready() {
@@ -417,6 +430,7 @@ class SpeechToTextVoiceInput implements VoiceInput {
     _pending = null;
     _onPartial = null;
     _onReady = null;
+    _onSoundLevel = null;
     pending.complete(text?.trim());
   }
 
@@ -426,6 +440,7 @@ class SpeechToTextVoiceInput implements VoiceInput {
     _pending = null;
     _onPartial = null;
     _onReady = null;
+    _onSoundLevel = null;
     pending.completeError(error);
   }
 }

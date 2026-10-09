@@ -9,6 +9,7 @@ import 'features/auth/services/auth_service.dart';
 import 'features/home/app_shell.dart';
 import 'features/permissions/screens/permission_onboarding_screen.dart';
 import 'features/permissions/services/permission_onboarding_service.dart';
+import 'features/voice_assistant/widgets/wake_word_overlay.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -91,7 +92,16 @@ class _MyAppState extends State<MyApp> {
         darkTheme: AppTheme.dark,
         themeMode: themeMode,
         // Above the Navigator, so the menu works on pushed pages too.
-        builder: (context, child) => AppMenuScope(controller: widget.services.appMenu, child: child!),
+        // The "Hey Child" waveform sits above every screen, at the camera cutout.
+        builder: (context, child) => AppMenuScope(
+          controller: widget.services.appMenu,
+          child: Stack(
+            children: [
+              child!,
+              Positioned.fill(child: WakeWordNotchOverlay(wakeWord: widget.services.wakeWordService)),
+            ],
+          ),
+        ),
         home: AuthGate(services: widget.services),
       ),
     );

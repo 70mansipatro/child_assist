@@ -76,6 +76,19 @@ class WakeWordChannel(private val activity: Activity) {
                     Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || Settings.canDrawOverlays(context),
                 )
                 "openBackgroundOpenSettings" -> result.success(openSettings(Settings.ACTION_MANAGE_OVERLAY_PERMISSION))
+                // The waveform above other apps and the Home screen while a question is in progress.
+                "showOverlay" -> result.success(
+                    WakeOverlay.show(
+                        context,
+                        call.argument<String>("phase") ?: "listening",
+                        call.argument<String>("title") ?: "",
+                        call.argument<String>("hint"),
+                    ),
+                )
+                "hideOverlay" -> {
+                    WakeOverlay.hide()
+                    result.success(null)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -129,6 +142,7 @@ class WakeWordChannel(private val activity: Activity) {
     }
 
     private fun stop() {
+        WakeOverlay.hide()
         WakeWordBridge.clear(context)
         WakeWordBridge.issue = null
         WakeWordBridge.service?.shutDown()
