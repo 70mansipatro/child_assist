@@ -333,10 +333,12 @@ class WakeWordService extends ChangeNotifier {
     return unlocked && generation == _generation;
   }
 
-  /// Whether the question may be taken while Child Assist is not on screen (another app or the
-  /// Home screen is). Only on an unlocked phone: with the lock screen showing, nothing is asked or
-  /// answered until the user unlocks and Child Assist comes up.
+  /// Whether the question may be taken while Child Assist is not on screen (another app, the Home
+  /// screen, or the screen off). On an unlocked phone, yes. With the lock screen showing, only if
+  /// the user switched on "Answer while locked"; otherwise nothing is asked or answered until they
+  /// unlock and Child Assist comes up.
   Future<bool> mayListenInBackground() async {
+    if (_lockScreenAnswers) return true;
     final lock = await _platform.lockState();
     return !lock.locked;
   }

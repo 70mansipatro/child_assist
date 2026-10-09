@@ -979,6 +979,28 @@ void main() {
       expect(backend.chatRequests.single['message'], 'where did I go today');
     });
 
+    testWidgets('"Answer while locked" on: screen off and locked, the question is heard and answered aloud', (tester) async {
+      await startApp(tester);
+      await switchOn(tester);
+      await wake().setLockScreenAnswers(true);
+      tts.repliesEnabled = true;
+      toBackground(tester);
+      phone.lock = const DeviceLockState(locked: true, secure: true);
+      await frames(tester);
+
+      await sayHeyChild(tester);
+      expect(phone.calls, isNot(contains('requestUnlock')), reason: 'the user allowed answers while locked');
+      expect(voice.calls, ['listen']);
+      voice.finish('what is my name');
+      await frames(tester);
+      expect(backend.chatRequests.single['message'], 'what is my name');
+      expect(tts.spoken, ['You said: what is my name']);
+      tts.finishSpeaking();
+      await tester.pump(const Duration(milliseconds: 800));
+      expect(phone.listening, isTrue);
+      await tester.pump(const Duration(seconds: 16));
+    });
+
     testWidgets('screen off and the app never shown: the wake phrase expires and listening resumes', (tester) async {
       await startApp(tester);
       await switchOn(tester);
